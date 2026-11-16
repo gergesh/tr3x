@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.4
+
 - ⌘V of a picture no longer says "Update Rex to paste pictures from another device" when Rex is up to date. When Rex passes ⌘V on as a key, Reply reads the clipboard on this Mac itself, or asks Rex on the other device to paste again.
 
 ## 0.1.3
