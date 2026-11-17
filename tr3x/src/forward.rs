@@ -264,7 +264,7 @@ mod tests {
         assert!(!is_web(b"H"));
     }
 
-    /// `TR3X_FORWARD_HOST=omarchy TR3X_FORWARD_PORT=5799 cargo test -- --ignored forward`, with
+    /// `TR3X_FORWARD_HOST=devbox TR3X_FORWARD_PORT=5799 cargo test -- --ignored forward`, with
     /// a server on that port there.
     #[tokio::test]
     #[ignore]
