@@ -365,18 +365,18 @@ any ✗ exits non-zero. A missing headless Chromium is only a warning.
 
 ## Localhost forwarding
 
-An agent on another machine that starts a dev server links to `http://localhost:5173`, which
-on this Mac is nothing. While a thread from a machine paired over SSH has its tab open, its
+An agent on another machine that starts a dev server links to `http://localhost:5173`, which on
+this Mac is nothing. While a thread from a machine paired over SSH has its tab open, its
 conversation pane forwards each `localhost`, `127.0.0.1`, `0.0.0.0` or `[::1]` port (1024 and
 up) that a reply in the latest run links to: `ssh -N -L 127.0.0.1:PORT:<there>:PORT`, where
 `<there>` is whichever of `127.0.0.1` and `::1` answers an HTTP request with HTTP or TLS. A
-server that isn't up yet gets two minutes of tries, then none. A port in use on this Mac is left
-alone, and so are the ports databases, Docker and the kubelet listen on, since a page in a
+server that isn't up yet gets two minutes of tries, then none. A port in use on this Mac is
+left alone, and so are the ports databases, Docker and the kubelet listen on, since a page in a
 browser here could reach them. `ssh` runs under a shell that holds a pipe from the pane and
-stops it when the pipe closes, so a pane that's killed leaves no forward behind. A laptop or phone ⌘-clicking the link gets Rex's own forward to this Mac, which runs
-on through this one. Machines paired through a Rex host or a link have no SSH host, so they get none; Rex's
-own `rex forward` would need a session and a Rex server of 0.1.0-preview.19 or later on that
-machine.
+stops it when the pipe closes, so a pane that's killed leaves no forward behind. A laptop or
+phone ⌘-clicking the link gets Rex's own forward to this Mac, which runs on through this one.
+Machines paired through a Rex host or a link have no SSH host, so they get none; Rex's own `rex
+forward` would need a session and a Rex server of 0.1.0-preview.19 or later on that machine.
 
 ## Repo layout
 
