@@ -99,7 +99,7 @@ rex.action{
   end,
 }
 
--- Answers an approval from anywhere: the focused thread's, else the thread Activity shows first.
+-- Answers an approval from anywhere: the focused thread's, else the thread ⌃⌘I goes to.
 local function answer_action(name, title, decision, keywords)
   rex.action{
     name = name,
