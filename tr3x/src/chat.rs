@@ -887,8 +887,17 @@ fn command_words(command: &str) -> String {
             && w.chars()
                 .all(|c| c.is_ascii_alphanumeric() || "._/@:+-".contains(c))
     };
+    // `KEY=value cmd` and `DIR=x; cmd` run `cmd`: the assignments are what to keep out.
+    let assignment = |w: &str| {
+        w.split_once('=').is_some_and(|(name, _)| {
+            !name.is_empty()
+                && !name.starts_with(|c: char| c.is_ascii_digit())
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
+    };
     let words: Vec<&str> = command
         .split_whitespace()
+        .skip_while(|w| assignment(w))
         .take_while(|w| plain(w))
         .take(3)
         .enumerate()
@@ -2145,7 +2154,9 @@ mod tests {
             command_words("/usr/bin/curl -H 'Authorization: Bearer x' u"),
             "curl"
         );
-        assert_eq!(command_words("TOKEN=abc npm publish"), "command");
+        assert_eq!(command_words("TOKEN=abc npm publish"), "npm publish");
+        assert_eq!(command_words("S=/tmp/x; E=$S/e; mkdir -p $E"), "mkdir");
+        assert_eq!(command_words("'quoted' thing"), "command");
         assert_eq!(
             command_words("git push origin main --force"),
             "git push origin"
