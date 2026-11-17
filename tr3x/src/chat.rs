@@ -71,6 +71,8 @@ struct Pane {
     spilled: usize,
     /// The last status sent with OSC 7501, so it goes out only when it changes.
     status: String,
+    /// When `status` last went to Rex.
+    status_at: Option<std::time::Instant>,
     title: String,
     header: bool,
     /// Set by a resize or a new chat width: the whole thread prints again at the new width.
@@ -838,10 +840,97 @@ fn app_of(composer: &crate::compose::Composer) -> &'static str {
         .unwrap_or("t3code")
 }
 
+/// What the working run is doing now, in a few words: its latest tool call as its row reads
+/// (`$ pnpm test`, `Edit src/chat.rs`), else the first line of what it's writing, else
+/// `Thinking`, cut to `DOING_WIDTH`. None when no run is working or it hasn't started on
+/// anything.
+fn doing(state: &ThreadState) -> Option<String> {
+    let run = state.active_run()?;
+    let run_id = run.get("id").and_then(Value::as_str)?;
+    state
+        .items()
+        .into_iter()
+        .rev()
+        .filter(|item| item.get("runId").and_then(Value::as_str) == Some(run_id))
+        .filter_map(|item| transcript::describe_plain(item, state.runs_for(item)))
+        .find_map(|block| doing_text(&block))
+}
+
+fn doing_text(block: &Block) -> Option<String> {
+    let text = match block.kind {
+        BlockKind::Tool => {
+            let tool = Some(block.tool_name.as_str()).filter(|t| !t.is_empty());
+            if tool == Some("AskUserQuestion") {
+                return None;
+            }
+            if block.item_type == "command_execution" {
+                format!("$ {}", command_words(&tool_text(block, tool)))
+            } else {
+                tool_text(block, tool)
+            }
+        }
+        BlockKind::Assistant => markdown_line(block.body.lines().find(|l| !l.trim().is_empty())?),
+        BlockKind::Reasoning => "Thinking".to_string(),
+        BlockKind::Plan => "Planning".to_string(),
+        _ => return None,
+    };
+    // The capsule scrolls, but a whole heredoc going by says less than its start.
+    Some(fit(&text, DOING_WIDTH)).filter(|t| !t.trim().is_empty())
+}
+
+/// A command as the program it runs and up to two plain words after it: `pnpm test`, `git
+/// push`, `curl`. Rex shows the line in its sidebar and notifications on every device, so the
+/// rest, where a flag, a quoted string or `KEY=value` can carry a token, stays in the thread.
+fn command_words(command: &str) -> String {
+    let plain = |w: &str| {
+        !w.starts_with('-')
+            && w.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "._/@:+-".contains(c))
+    };
+    let words: Vec<&str> = command
+        .split_whitespace()
+        .take_while(|w| plain(w))
+        .take(3)
+        .enumerate()
+        .map(|(i, w)| {
+            if i == 0 {
+                w.rsplit('/').next().unwrap_or(w)
+            } else {
+                w
+            }
+        })
+        .collect();
+    if words.is_empty() {
+        "command".into()
+    } else {
+        words.join(" ")
+    }
+}
+
+/// How many columns of `doing` the status line keeps.
+const DOING_WIDTH: usize = 80;
+/// How often a working thread's line may change in Rex.
+const STATUS_EVERY: Duration = Duration::from_secs(2);
+
+/// One line of Markdown as the words it shows: `**Tests pass.**` reads `Tests pass.`
+fn markdown_line(line: &str) -> String {
+    use pulldown_cmark::{Event, Parser};
+    let text: String = Parser::new(line)
+        .filter_map(|event| match event {
+            Event::Text(t) | Event::Code(t) => Some(t.into_string()),
+            Event::SoftBreak | Event::HardBreak => Some(" ".into()),
+            _ => None,
+        })
+        .collect();
+    one_line(&text)
+}
+
 /// OSC 7501 for T3's status word, as Rex's tabs and sidebar show it under the window's label,
 /// which already names the thread. `app` names the provider, so Rex shows its icon and name
 /// (`claude`, `codex`, …), else `t3code`. `msg` is that line: what the thread is waiting on you for,
-/// when it is, else the project and the status word, or the project alone when idle. `title`
+/// when it is, else the project and what the agent is doing (`doing`) while it works, else the
+/// project and the status word, or the project alone when idle. Rex's Activity list shows a
+/// working program's line in a capsule that scrolls, so it can say more than the word. `title`
 /// is the thread's `name`, else the project: Go to Anything's Activity list and Rex's
 /// notifications have no window label to go by. `shown` is the word the line says, which can differ from `word`, the one
 /// the state comes from: a finished run you've already seen still says Done, at rest. Both
@@ -853,6 +942,7 @@ fn status_sequence(
     ask: Option<&str>,
     project: Option<&str>,
     name: Option<&str>,
+    doing: Option<&str>,
 ) -> String {
     let (state, extra) = match word {
         Some("Approval") => ("blocked", ":kind=permission"),
@@ -870,6 +960,12 @@ fn status_sequence(
     }
     let msg = match (state, ask, shown, project) {
         ("blocked", Some(ask), _, _) => within(ask, 2048),
+        ("working", _, _, project) if let Some(doing) = doing.filter(|d| !d.is_empty()) => {
+            match project {
+                Some(project) => within(&format!("{project} · {doing}"), 2048),
+                None => within(doing, 2048),
+            }
+        }
         (_, _, Some(word), Some(project)) => within(&format!("{project} · {word}"), 2048),
         (_, _, Some(word), None) => word.to_string(),
         (_, _, None, project) => within(project.unwrap_or_default(), 2048),
@@ -1037,6 +1133,7 @@ impl Pane {
             cleared: false,
             spilled: 0,
             status: String::new(),
+            status_at: None,
             title: String::new(),
             header: false,
             reflow: false,
@@ -1386,6 +1483,7 @@ impl Pane {
         let project = project_name(shell, thread).map(one_line);
         let ask = state.and_then(crate::ask::line);
         let name = thread["title"].as_str().map(one_line);
+        let doing = state.and_then(doing);
         let seq = status_sequence(
             app,
             word,
@@ -1393,10 +1491,16 @@ impl Pane {
             ask.as_deref(),
             project.as_deref(),
             name.as_deref(),
+            doing.as_deref(),
         );
-        if seq != self.status {
+        // While the agent streams, the line changes with every word. Rex gets it at most every
+        // `STATUS_EVERY`, and at once when anything but the line changes.
+        let same_but_msg = |a: &str| a.split(":msg=").next().map(str::to_string);
+        let soon = self.status_at.is_some_and(|at| at.elapsed() < STATUS_EVERY);
+        if seq != self.status && !(soon && same_but_msg(&seq) == same_but_msg(&self.status)) {
             out(&seq);
             self.status = seq;
+            self.status_at = Some(std::time::Instant::now());
         }
     }
 
@@ -1512,6 +1616,8 @@ async fn event_loop(
     // Where Reply alone starts in its pane, to clear above it when that moves.
     let mut reply_top = 0;
     let link = crate::link::thread(None, client.id(), thread_id);
+    // Only the conversation forwards ports: Reply alone watches the same thread.
+    let mut forwards = (role != Role::Reply).then(|| crate::forward::Forwards::of(client));
     let mut pane = Pane::new(Media::new(client.state_dir().as_deref()), link, snap_tx);
     let mut shell = ShellState::default();
     let mut input = EventStream::new();
@@ -1553,6 +1659,9 @@ async fn event_loop(
                     pane.offline = None;
                     composer.offline = None;
                     if !changed && !recovered { continue; }
+                    if let (Some(forwards), Some(state)) = (forwards.as_mut(), composer.state.as_ref()) {
+                        forwards.follow(state);
+                    }
                     composer.thread_changed();
                     content_event = true;
                     pane.offline = None;
@@ -1719,12 +1828,14 @@ async fn event_loop(
                     reply = true;
                     dirty = true;
                 }
-                // A usage limit's times read differently as the clock moves on.
+                // A usage limit's times read differently as the clock moves on. And a working
+                // line held back while the agent streamed goes to Rex once it may.
                 if ticks.is_multiple_of(8) && role != Role::Reply {
                     let thread = t3client::inbox::find_thread(&shell, thread_id);
                     if pane.limit_now(thread) != pane.limit {
                         dirty = true;
                     }
+                    pane.set_status(&shell, thread, composer.state.as_ref(), app_of(&composer));
                 }
                 if ticks.is_multiple_of(8) && role != Role::Conversation && composer.usage_moved() {
                     reply = true;
@@ -2005,6 +2116,73 @@ mod tests {
     }
 
     #[test]
+    fn the_working_line_says_what_the_run_is_doing() {
+        use serde_json::json;
+        let state = |items: Value, status: &str| {
+            ThreadState::from_snapshot(&json!({"projection": {
+                "thread": {"id": "t"},
+                "runs": [
+                    {"id": "r1", "ordinal": 1, "status": "completed"},
+                    {"id": "r2", "ordinal": 2, "status": status},
+                ],
+                "turnItems": items,
+            }}))
+            .unwrap()
+        };
+        let old = json!({"id": "a", "runId": "r1", "ordinal": 1, "type": "command_execution",
+            "input": "ls", "status": "completed"});
+        let cmd = json!({"id": "b", "runId": "r2", "ordinal": 2, "type": "command_execution",
+            "input": "cd /x && pnpm test", "status": "running"});
+        let say = json!({"id": "c", "runId": "r2", "ordinal": 3, "type": "assistant_message",
+            "text": "\n**Tests pass.** Now the docs.\nMore", "status": "running"});
+        // Nothing of its own yet: the word stands.
+        assert_eq!(doing(&state(json!([old.clone()]), "running")), None);
+        assert_eq!(
+            doing(&state(json!([old.clone(), cmd.clone()]), "running")).as_deref(),
+            Some("$ pnpm test")
+        );
+        assert_eq!(
+            command_words("/usr/bin/curl -H 'Authorization: Bearer x' u"),
+            "curl"
+        );
+        assert_eq!(command_words("TOKEN=abc npm publish"), "command");
+        assert_eq!(
+            command_words("git push origin main --force"),
+            "git push origin"
+        );
+        assert_eq!(command_words("python3 -I - <<'EOF'"), "python3");
+        assert_eq!(
+            doing(&state(json!([old.clone(), cmd.clone(), say]), "running")).as_deref(),
+            Some("Tests pass. Now the docs.")
+        );
+        // A finished run is doing nothing.
+        assert_eq!(doing(&state(json!([cmd]), "completed")), None);
+        let seq = status_sequence(
+            "t3code",
+            Some("Working"),
+            Some("Working"),
+            None,
+            Some("tr3x"),
+            None,
+            Some("$ pnpm test"),
+        );
+        let b64 = base64::engine::general_purpose::STANDARD.encode("tr3x · $ pnpm test");
+        assert!(seq.contains(&format!(":msg={b64}")));
+        // Only while working: a done thread keeps its word.
+        let seq = status_sequence(
+            "t3code",
+            Some("Done"),
+            Some("Done"),
+            None,
+            Some("tr3x"),
+            None,
+            Some("x"),
+        );
+        let b64 = base64::engine::general_purpose::STANDARD.encode("tr3x · Done");
+        assert!(seq.contains(&format!(":msg={b64}")));
+    }
+
+    #[test]
     fn dynamic_tools_are_named() {
         let b = tool("dynamic_tool", "dynamic_tool", "", "");
         assert_eq!(
@@ -2176,7 +2354,8 @@ mod tests {
                 Some("Working"),
                 None,
                 Some("tr3x"),
-                Some("Fix the build")
+                Some("Fix the build"),
+                None
             ),
             format!(
                 "\x1b]7501;state=working:app=t3code:title={}:msg={}\x1b\\",
@@ -2195,6 +2374,7 @@ mod tests {
                 Some("Approval"),
                 None,
                 Some("t"),
+                None,
                 None
             )
             .contains("state=blocked:kind=permission")
@@ -2206,6 +2386,7 @@ mod tests {
                 Some("Input"),
                 None,
                 Some("t"),
+                None,
                 None
             )
             .contains("state=blocked:kind=question")
@@ -2217,16 +2398,26 @@ mod tests {
                 Some("Working"),
                 None,
                 Some("t"),
+                None,
                 None
             )
             .contains("state=working")
         );
         assert!(
-            status_sequence("t3code", Some("Done"), Some("Done"), None, Some("t"), None)
-                .contains("state=done")
+            status_sequence(
+                "t3code",
+                Some("Done"),
+                Some("Done"),
+                None,
+                Some("t"),
+                None,
+                None
+            )
+            .contains("state=done")
         );
         assert!(
-            status_sequence("t3code", None, None, None, Some("t"), None).contains("state=idle")
+            status_sequence("t3code", None, None, None, Some("t"), None, None)
+                .contains("state=idle")
         );
     }
 
@@ -2239,6 +2430,7 @@ mod tests {
             Some("Approval"),
             Some("Run pnpm test?"),
             Some("tr3x"),
+            None,
             None,
         );
         assert_eq!(
@@ -2257,13 +2449,14 @@ mod tests {
                 Some("Working"),
                 Some("x"),
                 Some("tr3x"),
+                None,
                 None
             )
             .ends_with(&format!(":msg={}\x1b\\", b64("tr3x · Working")))
         );
         // Idle: the project alone, on the line under the label; no project, the word alone.
         assert_eq!(
-            status_sequence("t3code", None, None, None, Some("tr3x"), None),
+            status_sequence("t3code", None, None, None, Some("tr3x"), None, None),
             format!(
                 "\x1b]7501;state=idle:app=t3code:title={}:msg={}\x1b\\",
                 b64("tr3x"),
@@ -2271,12 +2464,12 @@ mod tests {
             )
         );
         assert_eq!(
-            status_sequence("t3code", None, None, None, None, None),
+            status_sequence("t3code", None, None, None, None, None, None),
             "\x1b]7501;state=idle:app=t3code\x1b\\"
         );
         // A finished run you've seen: Done on the line, at rest in Rex.
         assert_eq!(
-            status_sequence("t3code", None, Some("Done"), None, Some("tr3x"), None),
+            status_sequence("t3code", None, Some("Done"), None, Some("tr3x"), None, None),
             format!(
                 "\x1b]7501;state=idle:app=t3code:title={}:msg={}\x1b\\",
                 b64("tr3x"),
@@ -2284,7 +2477,7 @@ mod tests {
             )
         );
         assert!(
-            status_sequence("t3code", Some("Done"), Some("Done"), None, None, None)
+            status_sequence("t3code", Some("Done"), Some("Done"), None, None, None, None)
                 .ends_with(&format!(":app=t3code:msg={}\x1b\\", b64("Done")))
         );
         // Over the limits: cut on a character, never mid-way through one.
@@ -2295,6 +2488,7 @@ mod tests {
             Some("Input"),
             Some(&long),
             Some(&long),
+            None,
             None,
         );
         let field = |key: &str| {
@@ -2416,6 +2610,7 @@ mod tests {
                 Some("Limited · resumes 3pm"),
                 None,
                 Some("tr3x"),
+                None,
                 None,
             ),
             format!(

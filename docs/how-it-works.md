@@ -363,11 +363,26 @@ machine that needs pairing is a ✗; one that's out of reach, or a token that ca
 and ends within a week, is a warning. Machines on the tailnet that run T3 and aren't paired are listed. Each ✗ comes with its fix, and
 any ✗ exits non-zero. A missing headless Chromium is only a warning.
 
+## Localhost forwarding
+
+An agent on another machine that starts a dev server links to `http://localhost:5173`, which
+on this Mac is nothing. While a thread from a machine paired over SSH has its tab open, its
+conversation pane forwards each `localhost`, `127.0.0.1`, `0.0.0.0` or `[::1]` port (1024 and
+up) that a reply in the latest run links to: `ssh -N -L 127.0.0.1:PORT:<there>:PORT`, where
+`<there>` is whichever of `127.0.0.1` and `::1` answers an HTTP request with HTTP or TLS. A
+server that isn't up yet gets two minutes of tries, then none. A port in use on this Mac is left
+alone, and so are the ports databases, Docker and the kubelet listen on, since a page in a
+browser here could reach them. `ssh` runs under a shell that holds a pipe from the pane and
+stops it when the pipe closes, so a pane that's killed leaves no forward behind. A laptop or phone ⌘-clicking the link gets Rex's own forward to this Mac, which runs
+on through this one. Machines paired through a Rex host or a link have no SSH host, so they get none; Rex's
+own `rex forward` would need a session and a Rex server of 0.1.0-preview.19 or later on that
+machine.
+
 ## Repo layout
 
 | Path | |
 |---|---|
-| `tr3x/` | The crate: `sync.rs`, `machines.rs` (pair, envs, sessions), `chat.rs`, `compose.rs`, `ask.rs` (what a thread waits on), `actions.rs` (every action, for the palette and `/`), `slash.rs` (the `/` menu), `prompt.rs` (Rename and Delete's question), `surface.rs` (`tr3x surface`), `new.rs` (new thread), `find.rs` (Find Thread), `pick.rs` (model picker), `picker.rs` (chips, buttons and menus), `icons.rs`, `render.rs` (Markdown to ANSI), `media.rs`, `scheme.rs` (light or dark), `link.rs` (where a thread opens), `install.rs` (install, uninstall, doctor), `fade.rs`, `rex.rs`, `t3.rs`, `state.rs`, `width.rs`. |
+| `tr3x/` | The crate: `sync.rs`, `machines.rs` (pair, envs, sessions), `chat.rs`, `compose.rs`, `ask.rs` (what a thread waits on), `actions.rs` (every action, for the palette and `/`), `slash.rs` (the `/` menu), `prompt.rs` (Rename and Delete's question), `surface.rs` (`tr3x surface`), `new.rs` (new thread), `find.rs` (Find Thread), `pick.rs` (model picker), `picker.rs` (chips, buttons and menus), `icons.rs`, `render.rs` (Markdown to ANSI), `media.rs`, `scheme.rs` (light or dark), `link.rs` (where a thread opens), `forward.rs` (localhost forwarding), `install.rs` (install, uninstall, doctor), `fade.rs`, `rex.rs`, `t3.rs`, `state.rs`, `width.rs`. |
 | `t3client/` | The T3 client: pairing (`auth.rs`, `pair.rs`), the machines tr3x knows and their tokens (`store.rs`), one connection per machine (`env.rs`, `hub.rs`), T3's wire protocol (`rpc.rs`, `http.rs`, `descriptor.rs`), its state and sidebar logic (`projection.rs`, `inbox.rs`), models, launch, transcripts, and what a T3 build offers (`surface.rs`). The wire client, projection, models, launch, transcript and sidebar code started from [krishhgg/t3term](https://github.com/krishhgg/t3term) at d1d33e8 (MIT). |
 | `rex/tr3x.lua` | The Rex config `install` writes out: sync, actions and key bindings. |
 | `install.sh` | The one-command install: checks Rex and T3, gets the binary, runs `tr3x install`. |
