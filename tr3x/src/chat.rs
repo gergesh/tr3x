@@ -895,8 +895,8 @@ fn command_words(command: &str) -> String {
                 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
         })
     };
-    let words: Vec<&str> = command
-        .split_whitespace()
+    let words: Vec<&str> = shell_words(command)
+        .into_iter()
         .skip_while(|w| assignment(w))
         .take_while(|w| plain(w))
         .take(3)
@@ -914,6 +914,38 @@ fn command_words(command: &str) -> String {
     } else {
         words.join(" ")
     }
+}
+
+/// `command` split where a shell splits it: at spaces outside quotes. Quotes stay in the
+/// words, so `A="x y" cmd` is the two words `A="x y"` and `cmd`.
+fn shell_words(command: &str) -> Vec<&str> {
+    let mut words = Vec::new();
+    let mut start = None;
+    let mut quote = None;
+    let mut escaped = false;
+    for (i, c) in command.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if c == '\\' && quote != Some('\'') {
+            escaped = true;
+        } else if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+        } else if c == '"' || c == '\'' {
+            quote = Some(c);
+        } else if c.is_whitespace() {
+            if let Some(s) = start.take() {
+                words.push(&command[s..i]);
+            }
+            continue;
+        }
+        start.get_or_insert(i);
+    }
+    if let Some(s) = start {
+        words.push(&command[s..]);
+    }
+    words
 }
 
 /// How many columns of `doing` the status line keeps.
@@ -2155,6 +2187,14 @@ mod tests {
             "curl"
         );
         assert_eq!(command_words("TOKEN=abc npm publish"), "npm publish");
+        assert_eq!(
+            command_words(r#"R="$HOME/Library/Application Support/rex"; "$R" ls"#),
+            "command"
+        );
+        assert_eq!(
+            command_words(r#"S="/a b"; cd "$S"; screencapture -x"#),
+            "cd"
+        );
         assert_eq!(command_words("S=/tmp/x; E=$S/e; mkdir -p $E"), "mkdir");
         assert_eq!(command_words("'quoted' thing"), "command");
         assert_eq!(

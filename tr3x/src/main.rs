@@ -487,38 +487,50 @@ impl Decision {
 /// goes to, the one Rex's Activity list shows first; Always, which lasts the session, only
 /// answers a thread you're in. A question needs its answer typed, so it goes to the tab.
 async fn answer(decision: Decision, target: &Target) -> Result<()> {
-    let key = match target.resolve().await {
-        Ok(key) => key,
-        Err(_) if decision == Decision::Always => {
-            bail!("Go to the thread first: Always lasts its whole session")
-        }
-        Err(_) => {
-            let state = state::State::load();
-            let window = state.next.as_ref().and_then(|n| n.window_id.as_deref());
-            window
-                .and_then(|window| {
-                    state.groups.values().find_map(|g| {
-                        g.windows
-                            .iter()
-                            .find(|(_, w)| w.window_id == window)
-                            .map(|(k, _)| k.clone())
-                    })
-                })
-                .context("Nothing is waiting on an approval")?
-        }
-    };
-    let (client, thread) = t3::thread(&key)?;
-    let thread_state = client.thread(&thread.thread, true).await?;
-    let (request, item) =
-        ask::pending(&thread_state).context("Nothing here is waiting on an approval")?;
-    if ask::is_question(&request) {
-        bail!("It's asking a question: answer it in its tab (⌃⌘I)");
+    // The focused thread first. Approve and Decline then try the thread ⌃⌘I goes to, so from
+    // any tab they answer what Activity shows blocked; Always lasts a whole session, so it
+    // answers only the thread you're in.
+    let focused = target.resolve().await.ok();
+    let mut keys: Vec<String> = focused.iter().cloned().collect();
+    if decision != Decision::Always {
+        let state = state::State::load();
+        let window = state.next.as_ref().and_then(|n| n.window_id.as_deref());
+        let next = window.and_then(|window| {
+            state.groups.values().find_map(|g| {
+                g.windows
+                    .iter()
+                    .find(|(_, w)| w.window_id == window)
+                    .map(|(k, _)| k.clone())
+            })
+        });
+        keys.extend(next.filter(|k| Some(k) != focused.as_ref()));
     }
-    let id = request["id"].as_str().context("the request has no id")?;
-    client.respond(&thread.thread, id, decision.t3()).await?;
-    let (verb, what) = ask::approval(&thread_state, &request, &item);
-    println!("{verb} {what}");
-    Ok(())
+    if keys.is_empty() {
+        bail!(match decision {
+            Decision::Always => "Go to the thread first: Always lasts its whole session",
+            _ => "Nothing is waiting on an approval",
+        });
+    }
+    for key in &keys {
+        let (client, thread) = t3::thread(key)?;
+        let thread_state = client.thread(&thread.thread, true).await?;
+        let Some((request, item)) = ask::pending(&thread_state) else {
+            continue;
+        };
+        if ask::is_question(&request) {
+            bail!("It's asking a question: answer it in its tab (⌃⌘I)");
+        }
+        let id = request["id"].as_str().context("the request has no id")?;
+        client.respond(&thread.thread, id, decision.t3()).await?;
+        let (verb, what) = ask::approval(&thread_state, &request, &item);
+        println!("{verb} {what}");
+        return Ok(());
+    }
+    bail!(if focused.is_some() && keys.len() == 1 {
+        "Nothing here is waiting on an approval"
+    } else {
+        "Nothing is waiting on an approval"
+    })
 }
 
 async fn lifecycle(target: &Target, action: Lifecycle) -> Result<()> {
