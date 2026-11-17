@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Rex's Activity list says what a working thread is doing: the program its latest command runs (`$ pnpm test`), the file it edits or the tool it uses, else the start of what it's writing. It said `project · Working`. The rest of a command stays in the thread, since the line shows on every device.
+- A thread on a machine paired over SSH forwards each `localhost` port its latest reply links to onto the same port on this Mac, once a web server answers there, so the link opens as written. On a laptop or phone, Rex's ⌘-click forwarding carries it the rest of the way. A port already in use here, and the ports databases and Docker use, are left alone. The forwards close with the tab.
+- **Approve**, **Approve Always** and **Decline** in the palette answer an approval. They answer the thread in front of you, or else, for Approve and Decline, the one ⌃⌘I goes to, so from any tab they answer what Activity shows blocked. Always answers only the thread you're in. Bind one with `rex.bind`.
+
 ## 0.1.4
 
 - ⌘V of a picture no longer says "Update Rex to paste pictures from another device" when Rex is up to date. When Rex passes ⌘V on as a key, Reply reads the clipboard on this Mac itself, or asks Rex on the other device to paste again.

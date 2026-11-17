@@ -99,6 +99,20 @@ rex.action{
   end,
 }
 
+-- Answers an approval from anywhere: the focused thread's, else the thread ⌃⌘I goes to.
+local function answer_action(name, title, decision, keywords)
+  rex.action{
+    name = name,
+    title = title,
+    category = "T3 Code",
+    keywords = keywords,
+    run = function(ctx) tr3x(ctx, { "answer", decision }) end,
+  }
+end
+answer_action("t3_approve", "Approve", "approve", "t3 allow accept yes permission run")
+answer_action("t3_approve_always", "Approve Always", "always", "t3 allow accept session permission")
+answer_action("t3_decline", "Decline", "decline", "t3 deny reject no permission")
+
 -- From a subagent up to the thread it works for, and from a thread down to its subagent. Each
 -- goes on the screen that asked, so a phone and a Mac can be in different places.
 local function hop(name, title, command, keywords)
