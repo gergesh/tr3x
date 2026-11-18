@@ -377,16 +377,25 @@ fn prompt_item(
 ) -> Value {
     let title = crate::sync::label(thread["title"].as_str().unwrap_or(""));
     let at = when(group, thread);
+    // An open thread says what it's doing, as T3's sidebar card does.
+    let status = (group == Group::Open)
+        .then(|| t3client::inbox::status_label(thread, now))
+        .flatten();
     let (icon, detail) = match group {
+        Group::Open if matches!(status, Some("Approval" | "Input" | "Waiting")) => {
+            ("person", ago(at, now))
+        }
+        Group::Open if matches!(status, Some("Working" | "Goal")) => ("terminal", ago(at, now)),
         Group::Open if thread["pinnedAt"].is_string() => ("star", ago(at, now)),
-        Group::Open => ("terminal", ago(at, now)),
+        Group::Open => ("document", ago(at, now)),
         Group::Snoozed => ("clock", until(-at, now, offset_minutes)),
         Group::Settled => ("tag", ago(at, now)),
         Group::Archived => ("package", ago(at, now)),
     };
+    let state = status.unwrap_or(group.title());
     let subtitle = match project {
-        "" => group.title().to_string(),
-        project => format!("{} · {project}", group.title()),
+        "" => state.to_string(),
+        project => format!("{state} · {project}"),
     };
     json!({
         "id": key,
@@ -727,8 +736,21 @@ mod tests {
         let item = prompt_item("e/b".into(), &open, Group::Open, "", now, 0);
         assert_eq!(item["title"], "Untitled");
         assert_eq!(item["subtitle"], "Open");
-        assert_eq!(item["icon"], "terminal");
+        assert_eq!(item["icon"], "document");
         assert_eq!(item["detail"], "5m ago");
+        let asking =
+            json!({"id": "q", "title": "Q", "pendingRuntimeRequest": {"kind": "user_input"}});
+        let item = prompt_item("e/q".into(), &asking, Group::Open, "app", now, 0);
+        assert_eq!(
+            (item["icon"].as_str(), item["subtitle"].as_str()),
+            (Some("person"), Some("Input · app"))
+        );
+        let working = json!({"id": "w", "title": "W", "latestRunId": "r", "status": "running"});
+        let item = prompt_item("e/w".into(), &working, Group::Open, "", now, 0);
+        assert_eq!(
+            (item["icon"].as_str(), item["subtitle"].as_str()),
+            (Some("terminal"), Some("Working"))
+        );
         let snoozed =
             json!({"id": "s", "title": "Later", "snoozedUntil": "2026-10-31T15:00:00.000Z"});
         let item = prompt_item("e/s".into(), &snoozed, Group::Snoozed, "app", now, 0);

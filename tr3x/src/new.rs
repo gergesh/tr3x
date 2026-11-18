@@ -1529,7 +1529,7 @@ fn project_item(
         "title": title,
         "subtitle": subtitle,
         "detail": detail,
-        "icon": "folder",
+        "icon": if env.is_local() { "folder" } else { "server" },
     })
 }
 
@@ -1621,12 +1621,14 @@ pub async fn run(welcome: bool, env: Option<String>, start: Start) -> Result<()>
         (cols as usize, rows as usize),
     );
     ui.load(config, &shell);
-    if let Some(project) = start.project
-        && ui.projects.iter().any(|p| p["id"] == project.as_str())
-    {
-        ui.set_project(project);
-        if let Some(mode) = start.workspace.as_deref().and_then(workspace_mode) {
-            ui.mode = mode;
+    if let Some(project) = start.project {
+        if ui.projects.iter().any(|p| p["id"] == project.as_str()) {
+            ui.set_project(project);
+            if let Some(mode) = start.workspace.as_deref().and_then(workspace_mode) {
+                ui.mode = mode;
+            }
+        } else {
+            ui.note = Some((format!("No project {project} here"), true));
         }
     }
     for m in machines {

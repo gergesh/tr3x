@@ -48,9 +48,10 @@ local function trim(text) return (text:gsub("^%s+", ""):gsub("%s+$", "")) end
 -- floating window instead.
 local function native() return rex.ui ~= nil and rex.ui.pick ~= nil end
 
--- What a question that went unanswered means for the action: nothing, unless Rex couldn't ask.
+-- What a question that went unanswered means for the action: nothing, unless Rex couldn't ask
+-- (an app too old for prompts, or a prompt that failed), and tr3x's own window should.
 local function unasked(why)
-  if why == "unsupported" then return true end
+  if why == "unsupported" or why == "failed" then return true end
   if why ~= "cancelled" and why ~= "timeout" then rex.log("warn", "tr3x: the palette didn't ask: " .. tostring(why)) end
   return false
 end
@@ -87,7 +88,7 @@ ASK.t3_delete = function(ctx)
   if current == "" then current = "this thread" end
   local choice, why = rex.ui.pick{ title = "Delete Thread", confirm = "Choose", items = {
     { id = "keep", title = "Keep it" },
-    { id = "delete", title = "Delete " .. current, subtitle = "For good, in T3 too", icon = "document" },
+    { id = "delete", title = "Delete " .. current, subtitle = "For good, in T3 too" },
   } }
   if choice == nil then return not unasked(why) end
   if choice == "delete" then tr3x(ctx, { "delete", "--yes" }) end
@@ -151,7 +152,7 @@ rex.action{
   run = function(ctx)
     if not ctx.block_id then error(NO_THREAD, 0) end
     if not native() then error("Update Rex to choose a time here; Reply's /snooze takes one", 0) end
-    local title = "Snooze Thread"
+    local title, failed = "Snooze Thread", nil
     for _ = 1, 3 do
       local choice, why = rex.ui.pick{ title = title, placeholder = "Or type a time, such as 45m or 2d",
         confirm = "Snooze", items = SNOOZE, allow_other = true }
@@ -162,8 +163,10 @@ rex.action{
       if type(choice) == "table" then choice = trim(choice.text) end
       local r = rex.exec({ TR3X, "snooze", "--block", ctx.block_id, "--", choice }, { env = ENV, timeout = 20 })
       if r and r.ok then return end
+      failed = r and trim((r.stderr ~= "" and r.stderr or r.stdout):gsub("^tr3x: ", "")) or "tr3x didn't run"
       title = "Snooze Thread: can't read “" .. choice .. "”"
     end
+    error(failed, 0)
   end,
 }
 rex.action{
