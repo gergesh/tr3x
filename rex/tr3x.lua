@@ -198,6 +198,108 @@ answer_action("t3_approve", "Approve", "approve", "t3 allow accept yes permissio
 answer_action("t3_approve_always", "Approve Always", "always", "t3 allow accept session permission")
 answer_action("t3_decline", "Decline", "decline", "t3 deny reject no permission")
 
+-- What a thread waits on, answered in the palette: an approval, or each of an agent's questions
+-- with its options, on whichever device answers first. Returns "answered", "skipped" (passed
+-- over, with `opts.skip`) or nil to stop. A secret goes to its tab: the palette can't hide what's
+-- typed into it.
+local GO, SKIP = "tr3x:go", "tr3x:skip"
+local APPROVAL_ICON = { Run = "terminal", Edit = "document", Read = "document" }
+
+local function waiting(ctx, skip)
+  local args = { "waiting" }
+  for _, k in ipairs(skip or {}) do table.insert(args, "--skip"); table.insert(args, k) end
+  local w = rex.json.decode(tr3x(ctx, args))
+  if type(w) ~= "table" then return nil end
+  return w
+end
+
+local function go(w)
+  if type(w.tab) == "table" and w.tab.session_id then rex.client.queue("session.select", w.tab) end
+end
+
+local function answer_in_palette(w, opts)
+  if w.kind == "secret" then go(w); return nil end
+  local extra = { { id = GO, title = "Go to Thread", subtitle = w.title, icon = "link" } }
+  if opts and opts.skip then table.insert(extra, { id = SKIP, title = "Skip", subtitle = "Answer it later", icon = "clock" }) end
+  local function chosen(id)
+    if id == GO then go(w); return nil end
+    if id == SKIP then return "skipped" end
+  end
+  if w.kind == "approval" then
+    local items = {
+      { id = "approve", title = "Approve", subtitle = w.what, icon = APPROVAL_ICON[w.verb] or "gear" },
+      { id = "always", title = "Approve Always", subtitle = "For the rest of this session" },
+      { id = "decline", title = "Decline" },
+    }
+    for _, e in ipairs(extra) do table.insert(items, e) end
+    local choice = rex.ui.pick{ title = w.title, placeholder = w.verb .. " " .. w.what .. "?", items = items }
+    if choice == nil then return nil end
+    if choice == GO or choice == SKIP then return chosen(choice) end
+    tr3x({}, { "respond", "--thread", w.thread, "--request", w.request, "--decision", choice })
+    return "answered"
+  end
+  local answers = {}
+  for _, q in ipairs(w.questions or {}) do
+    local title = q.header or w.title
+    local answer
+    if #(q.options or {}) == 0 then
+      answer = rex.ui.input{ title = title, placeholder = q.question, confirm = "Answer" }
+      if answer == nil then return nil end
+    else
+      local items = {}
+      for _, o in ipairs(q.options) do table.insert(items, { id = o.id, title = o.title, subtitle = o.subtitle }) end
+      if not q.multiple then for _, e in ipairs(extra) do table.insert(items, e) end end
+      answer = rex.ui.pick{ title = title, placeholder = q.question, items = items,
+        multiple = q.multiple, allow_other = not q.multiple, confirm = q.multiple and "Answer" or nil }
+      if answer == nil then return nil end
+      if answer == GO or answer == SKIP then return chosen(answer) end
+      if type(answer) == "table" and answer.text then answer = answer.text end
+    end
+    answers[q.id] = answer
+  end
+  tr3x({}, { "respond", "--thread", w.thread, "--request", w.request, "--answers", rex.json.encode(answers) })
+  return "answered"
+end
+
+local NOTHING = "Nothing is waiting on you"
+
+-- The focused thread's approval or question, else the next thread's, in the palette. Where Rex
+-- can't ask there, it goes to that thread's tab instead.
+rex.action{
+  name = "t3_answer",
+  title = "Answer…",
+  category = "T3 Code",
+  keywords = "t3 approve decline allow question reply respond permission needs waiting",
+  run = function(ctx)
+    local w = waiting(ctx)
+    if not w then error(NOTHING, 0) end
+    if not native() then return go(w) end
+    answer_in_palette(w)
+  end,
+}
+
+-- Everything waiting on you, one after another, on any machine: answer each, skip it, or stop.
+rex.action{
+  name = "t3_answer_next",
+  title = "Answer Next…",
+  category = "T3 Code",
+  keywords = "t3 approve decline question inbox all every waiting queue triage",
+  run = function(ctx)
+    if not native() then error("Update Rex to answer here; ⌃⌘I goes to what needs you", 0) end
+    local done = {}
+    for n = 1, 25 do
+      local w = waiting(ctx, done)
+      if not w then
+        if n == 1 then error(NOTHING, 0) end
+        return
+      end
+      local result = answer_in_palette(w, { skip = true })
+      if result == nil then return end
+      table.insert(done, w.thread)
+    end
+  end,
+}
+
 -- From a subagent up to the thread it works for, and from a thread down to its subagent. Each
 -- goes on the screen that asked, so a phone and a Mac can be in different places.
 local function hop(name, title, command, keywords)
@@ -307,11 +409,12 @@ rex.action{
   run = function(ctx) tr3x({}, { "reopen", "--client", ctx.client_id }) end,
 }
 
--- Five keys, for what you reach for from anywhere. Everything else is in the palette under T3 Code
+-- Six keys, for what you reach for from anywhere. Everything else is in the palette under T3 Code
 -- and in Reply's `/` commands; bind any of it yourself in init.lua.
 rex.bind("ctrl+cmd+i", "t3_inbox")
 rex.bind("ctrl+cmd+n", "t3_new")
 rex.bind("ctrl+cmd+o", "t3_project")
+rex.bind("ctrl+cmd+a", "t3_answer")
 rex.bind("ctrl+cmd+[", "t3_parent")
 rex.bind("ctrl+cmd+]", "t3_child")
 

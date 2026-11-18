@@ -190,6 +190,16 @@ worktrees `vcs.listRefs` reports checked out elsewhere, and a new worktree, the 
 default first). **Open Project…** then opens New Thread with `--project` and `--workspace`.
 `tr3x lua` prints the config `install` writes, for working on it.
 
+**Answer…** and **Answer Next…** read `tr3x waiting`: the focused thread's pending runtime
+request, else the thread ⌃⌘I goes to, else any thread on any machine whose shell has a
+`pendingRuntimeRequest`, newest first, less the ones `--skip` names. It prints the approval
+(verb and subject, as Reply's header has them) or the questions with their options, by the
+value T3 takes back. The answer goes through `tr3x respond`, which checks the request is still
+the one pending, since another device may have answered while the palette was open, then sends
+`runtime-request.respond` with the decision or the `{question id: value or [values]}` answers
+Reply sends. A secret request (`secrets.answerRequest`) isn't asked there: `rex.ui.input` shows
+what's typed, so the action goes to its tab.
+
 Each sends what T3's own menu sends: `thread.metadata.update` with a title or
 `regenerateTitle`, `thread.fork` from the thread's latest stable point, `thread.delete`,
 `thread.stop` (else `run.interrupt` on an older T3), and `orchestration.forceStopThread`.

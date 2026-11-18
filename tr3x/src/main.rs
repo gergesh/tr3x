@@ -39,6 +39,7 @@ mod t3;
 mod term;
 mod update;
 mod usage;
+mod waiting;
 mod width;
 
 use std::time::Duration;
@@ -288,6 +289,32 @@ enum Command {
         decision: Decision,
         #[command(flatten)]
         target: Target,
+    },
+    /// Print what the focused thread waits on, else the next thread that waits, as JSON for the
+    /// palette's Answer…; `null` for nothing.
+    #[command(hide = true)]
+    Waiting {
+        /// Only the focused thread.
+        #[arg(long)]
+        here: bool,
+        /// Leave out these threads (`env/thread`), already answered or passed over.
+        #[arg(long)]
+        skip: Vec<String>,
+        #[command(flatten)]
+        target: Target,
+    },
+    /// Answer a request `waiting` printed: an approval with a decision, or questions with
+    /// `--answers '{"question id": "value"}'`.
+    #[command(hide = true)]
+    Respond {
+        #[arg(long)]
+        thread: String,
+        #[arg(long)]
+        request: String,
+        #[arg(long, value_enum, conflicts_with = "answers")]
+        decision: Option<Decision>,
+        #[arg(long)]
+        answers: Option<String>,
     },
     /// Print the thread a Rex block belongs to.
     #[command(hide = true)]
@@ -808,6 +835,23 @@ async fn run(cli: Cli) -> Result<()> {
         }
         Command::Inbox => install::inbox().await,
         Command::Answer { decision, target } => answer(decision, &target).await,
+        Command::Waiting { here, skip, target } => {
+            waiting::print(target.resolve().await.ok(), here, &skip).await
+        }
+        Command::Respond {
+            thread,
+            request,
+            decision,
+            answers,
+        } => {
+            waiting::respond(
+                &thread,
+                &request,
+                decision.map(Decision::t3),
+                answers.as_deref(),
+            )
+            .await
+        }
         Command::Parent(t) => install::hop(&t.resolve().await?, true).await,
         Command::Child(t) => install::hop(&t.resolve().await?, false).await,
         Command::Rpc {

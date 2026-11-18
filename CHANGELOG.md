@@ -9,6 +9,7 @@
 
 - With a Rex app that can ask in its own palette (Rex API revision 17 or later), the palette asks its questions in Rex's own command palette, so they work the same on a phone or iPad as on the Mac. **Find Thread…** lists every thread there, with its state, project and when, to filter and pick. **Rename Thread…** opens on the current title. **Delete Thread…** asks, with Keep it first. An older Rex app gets the floating windows as before.
 - **Open Project…** (⌃⌘O) picks a project on any machine, then where to start: its folder, a worktree it already has, or a new one. New Thread's composer opens on that, for the first message.
+- **Answer…** (⌃⌘A) answers what the thread in front of you waits on, else the next thread that waits, in the palette, from any tab or device. An approval offers Approve, Approve Always or Decline, with the command or file it allows. An agent's questions come one after another with their options, several at once where the question takes several, or a reply typed in. **Go to Thread** opens it instead. **Answer Next…** goes through everything waiting on every machine, with **Skip** for one to leave. A secret request still opens its tab, since the palette can't hide what's typed.
 - **Snooze Thread…** picks 1 hour, 3 hours, tomorrow or a week, or takes a time you type, such as `45m`.
 
 ## 0.1.4
