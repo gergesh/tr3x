@@ -889,8 +889,10 @@ fn watch(
     payload: Value,
     resume: Resume,
 ) -> mpsc::Receiver<WatchEvent> {
-    // One forwarded value plus one unaccepted RPC chunk. Each is bounded by the
-    // 64 MiB protocol message limit; moving values avoids cloning large snapshots.
+    // One forwarded value plus at most 16 unaccepted RPC chunks, 64 MiB of JSON in all, so
+    // what a watch holds stays bounded; moving values avoids cloning large snapshots. T3
+    // 0.1.10 sends up to 8 chunks on these streams before it waits for an Ack, so a window
+    // of one chunk stopped the stream.
     let (events, receiver) = mpsc::channel(1);
     tokio::spawn(async move {
         let mut last_sequence = match resume {
@@ -911,7 +913,7 @@ fn watch(
                     if let Some(sequence) = last_sequence {
                         request["afterSequence"] = json!(sequence);
                     }
-                    let limits = StreamLimits::new(1, 64 << 20).expect("nonzero watch limits");
+                    let limits = StreamLimits::new(16, 64 << 20).expect("nonzero watch limits");
                     match rpc.bounded_stream(tag, request, limits).await {
                         Err(e) => e.to_string(),
                         Ok(mut stream) => loop {
@@ -1258,6 +1260,48 @@ pub(crate) mod tests {
             [1, 2, 3]
         );
         // Let the watcher accept the fully forwarded chunk before cancellation.
+        tokio::task::yield_now().await;
+        drop(events);
+        server.await.unwrap();
+    }
+
+    /// T3 0.1.10 acks a shell, thread or config stream's chunks itself until 8 wait on tr3x,
+    /// so it sends 8 chunks before any Ack. The watch takes them all, in order, and acks each.
+    #[tokio::test]
+    async fn a_watch_takes_the_chunks_t3_sends_before_its_ack() {
+        const CHUNKS: u64 = 8;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = client_at(&format!("http://{}", listener.local_addr().unwrap()));
+        let server = tokio::spawn(async move {
+            let mut tickets = 0;
+            let (_, mut socket) = open(&listener, &mut tickets).await;
+            let request = recv(&mut socket).await;
+            assert_eq!(request["tag"], SHELL);
+            let id = request["id"].clone();
+            for sequence in 1..=CHUNKS {
+                let values = json!([renamed(sequence, "t", "title")]);
+                let chunk = json!({"_tag": "Chunk", "requestId": id, "values": values});
+                socket
+                    .send(Message::Text(chunk.to_string().into()))
+                    .await
+                    .unwrap();
+            }
+            for _ in 1..=CHUNKS {
+                assert_eq!(
+                    recv(&mut socket).await,
+                    json!({"_tag": "Ack", "requestId": id})
+                );
+            }
+            assert_eq!(recv(&mut socket).await, interrupt(&id));
+        });
+        let mut events = client.watch_shell(None);
+        let received = items(&mut events, CHUNKS as usize).await;
+        let sequences: Vec<u64> = received
+            .iter()
+            .map(|item| item["sequence"].as_u64().unwrap())
+            .collect();
+        assert_eq!(sequences, (1..=CHUNKS).collect::<Vec<_>>());
+        // Let the watcher accept the last chunk before it drops.
         tokio::task::yield_now().await;
         drop(events);
         server.await.unwrap();
