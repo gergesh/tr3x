@@ -55,7 +55,7 @@ automatic updates. From a clone, `sh install.sh` builds with cargo instead.
 | To | Do |
 | --- | --- |
 | See your threads | Open Rex. The **T3 Code** session has a tab per open thread. |
-| Start a thread | ⌘T in the session, or ⌃⌘N anywhere. The chips pick project, model and worktree. |
+| Start a thread | ⌘T in the session, or ⌃⌘N anywhere. The chips pick project, model and worktree. ⌃⌘O picks a project and worktree first. |
 | Reply | Type under the conversation, Enter. `/` lists commands and the agent's skills. |
 | Answer an approval | Click **Approve**, **Always** or **Decline**, or type `a`, `s` or `d`. |
 | Jump to what needs you | ⌃⌘I, on any machine. |

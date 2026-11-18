@@ -26,17 +26,72 @@ end
 -- or `rex do`, an action may have no block, or the last window may not be a thread's.
 local NO_THREAD = "Go to a T3 thread first"
 
-local function tr3x(ctx, args)
+-- `tail` goes after the block, for text that could read as a flag.
+local function tr3x(ctx, args, tail)
   local argv = { TR3X }
   for _, a in ipairs(args) do table.insert(argv, a) end
   if ctx.block_id then
     table.insert(argv, "--block")
     table.insert(argv, ctx.block_id)
   end
+  for _, a in ipairs(tail or {}) do table.insert(argv, a) end
   local r, err = rex.exec(argv, { env = ENV, timeout = 20 })
   if not r then error(err, 0) end
   if not r.ok then error((r.stderr ~= "" and r.stderr or r.stdout):gsub("^tr3x: ", ""), 0) end
   return r.stdout
+end
+
+local function trim(text) return (text:gsub("^%s+", ""):gsub("%s+$", "")) end
+
+-- Questions go in Rex's own palette (rex.ui, Rex API revision 17), on whichever device answers
+-- first. A Rex app too old to show them answers "unsupported", and the action opens tr3x's own
+-- floating window instead.
+local function native() return rex.ui ~= nil and rex.ui.pick ~= nil end
+
+-- What a question that went unanswered means for the action: nothing, unless Rex couldn't ask.
+local function unasked(why)
+  if why == "unsupported" then return true end
+  if why ~= "cancelled" and why ~= "timeout" then rex.log("warn", "tr3x: the palette didn't ask: " .. tostring(why)) end
+  return false
+end
+
+-- The rex.ui items `tr3x <args>` prints.
+local function items(args)
+  return rex.json.decode(tr3x({}, args))
+end
+
+-- A floating layer over the thread, running tr3x.
+local function layer(ctx, label, bounds, argv)
+  local _, err = rex.session.new_layer{ session_id = ctx.session_id, bounds = bounds, focus = true,
+    layout = { block = { flavor = "com.superlogical.terminal.shell", label = label,
+      options = { shell = "none", login = false, command = pane(argv) } } } }
+  rex.session.disown_block{ session_id = ctx.session_id }
+  if err then error(err, 0) end
+end
+
+-- The thread actions that ask in the palette, by name. Each returns false when Rex couldn't
+-- ask, and its floating window opens instead.
+local ASK = {}
+
+ASK.t3_rename = function(ctx)
+  local current = trim(tr3x(ctx, { "title" }))
+  local title, why = rex.ui.input{ title = "Rename Thread", value = current, placeholder = "Title", confirm = "Rename" }
+  if title == nil then return not unasked(why) end
+  title = trim(title)
+  if title ~= "" and title ~= current then tr3x(ctx, { "rename" }, { "--", title }) end
+  return true
+end
+
+ASK.t3_delete = function(ctx)
+  local current = trim(tr3x(ctx, { "title" }))
+  if current == "" then current = "this thread" end
+  local choice, why = rex.ui.pick{ title = "Delete Thread", confirm = "Choose", items = {
+    { id = "keep", title = "Keep it" },
+    { id = "delete", title = "Delete " .. current, subtitle = "For good, in T3 too", icon = "document" },
+  } }
+  if choice == nil then return not unasked(why) end
+  if choice == "delete" then tr3x(ctx, { "delete", "--yes" }) end
+  return true
 end
 
 -- An action on the focused thread. `opts.client` passes the client that ran it, for an action
@@ -60,7 +115,7 @@ local function thread_action(name, title, args, keywords, opts)
   }
 end
 
--- An action that asks something first, in a floating layer over the thread.
+-- An action that asks something first: in the palette, else in a floating layer over the thread.
 local function layer_action(name, title, args, keywords)
   rex.action{
     name = name,
@@ -69,21 +124,48 @@ local function layer_action(name, title, args, keywords)
     keywords = keywords,
     run = function(ctx)
       if not ctx.block_id then error(NO_THREAD, 0) end
+      if ASK[name] and native() and ASK[name](ctx) then return end
       local argv = {}
       for _, a in ipairs(args) do table.insert(argv, a) end
       table.insert(argv, "--block")
       table.insert(argv, ctx.block_id)
-      local _, err = rex.session.new_layer{ session_id = ctx.session_id, bounds = { 0.2, 0.3, 0.6, 0.3 }, focus = true,
-        layout = { block = { flavor = "com.superlogical.terminal.shell", label = title,
-          options = { shell = "none", login = false, command = pane(argv) } } } }
-      rex.session.disown_block{ session_id = ctx.session_id }
-      if err then error(err, 0) end
+      layer(ctx, title, { 0.2, 0.3, 0.6, 0.3 }, argv)
     end,
   }
 end
 
 -- The thread actions, from tr3x's list of them (actions.rs), each also a `/` command in Reply.
 @ACTIONS@
+-- Snooze for a time from a list, or one typed in: 45m, 2h, 2d.
+local SNOOZE = {
+  { id = "1h", title = "1 hour", icon = "clock" },
+  { id = "3h", title = "3 hours", icon = "clock" },
+  { id = "tomorrow", title = "Tomorrow", detail = "9am", icon = "clock" },
+  { id = "7d", title = "1 week", icon = "clock" },
+}
+rex.action{
+  name = "t3_snooze",
+  title = "Snooze Thread…",
+  category = "T3 Code",
+  keywords = "t3 later remind hide",
+  run = function(ctx)
+    if not ctx.block_id then error(NO_THREAD, 0) end
+    if not native() then error("Update Rex to choose a time here; Reply's /snooze takes one", 0) end
+    local title = "Snooze Thread"
+    for _ = 1, 3 do
+      local choice, why = rex.ui.pick{ title = title, placeholder = "Or type a time, such as 45m or 2d",
+        confirm = "Snooze", items = SNOOZE, allow_other = true }
+      if choice == nil then
+        if unasked(why) then error("Update Rex to choose a time here; Reply's /snooze takes one", 0) end
+        return
+      end
+      if type(choice) == "table" then choice = trim(choice.text) end
+      local r = rex.exec({ TR3X, "snooze", "--block", ctx.block_id, "--", choice }, { env = ENV, timeout = 20 })
+      if r and r.ok then return end
+      title = "Snooze Thread: can't read “" .. choice .. "”"
+    end
+  end,
+}
 rex.action{
   name = "t3_inbox",
   title = "Go to Thread That Needs You",
@@ -133,42 +215,83 @@ end
 hop("t3_parent", "Go to Thread This Subagent Works For", "parent", "t3 subagent parent up back")
 hop("t3_child", "Go to Subagent", "child", "t3 subagent child down")
 
+-- A new thread's window in the T3 Code session, running the composer with `args`.
+local function compose(args)
+  local r = rex.exec({ TR3X, "inbox" }, { env = ENV, timeout = 10 })
+  if not (r and r.ok) then sync(); error("tr3x wasn't syncing; starting it", 0) end
+  local sid = rex.json.decode(r.stdout).home
+  local argv = { "new" }
+  for _, a in ipairs(args) do table.insert(argv, a) end
+  local w, err = rex.session.new_window{
+    session_id = sid,
+    window_label = "New Thread",
+    focus = true,
+    layout = { block = { flavor = "com.superlogical.terminal.shell", label = "New Thread",
+      options = { shell = "none", login = false, command = pane(argv) } } },
+  }
+  if err then error(err, 0) end
+  rex.session.disown_block{ session_id = sid }
+  rex.client.queue("session.select", { session_id = sid, window_id = w.window_id })
+end
+
 -- A new thread in the T3 Code session, from anywhere. In that session, New Tab does the same.
 rex.action{
   name = "t3_new",
   title = "New Thread",
   category = "T3 Code",
   keywords = "t3 create start compose prompt",
-  run = function(ctx)
-    local r = rex.exec({ TR3X, "inbox" }, { env = ENV, timeout = 10 })
-    if not (r and r.ok) then sync(); error("tr3x wasn't syncing; starting it", 0) end
-    local sid = rex.json.decode(r.stdout).home
-    local w, err = rex.session.new_window{
-      session_id = sid,
-      window_label = "New Thread",
-      focus = true,
-      layout = { block = { flavor = "com.superlogical.terminal.shell", label = "New Thread",
-        options = { shell = "none", login = false, command = pane({ "new" }) } } },
-    }
-    if err then error(err, 0) end
-    rex.session.disown_block{ session_id = sid }
-    rex.client.queue("session.select", { session_id = sid, window_id = w.window_id })
+  run = function() compose({}) end,
+}
+
+-- A project, then where in it: its folder, a worktree it has, or a new one. The composer opens
+-- on that, for the first message.
+rex.action{
+  name = "t3_project",
+  title = "Open Project…",
+  category = "T3 Code",
+  keywords = "t3 project folder repo worktree branch new thread start",
+  run = function()
+    if not native() then error("Update Rex to pick here; New Thread (⌃⌘N) picks a project too", 0) end
+    local projects = items({ "projects" })
+    local project, why = rex.ui.pick{ title = "Open Project", placeholder = "Filter projects",
+      confirm = "Next", items = projects }
+    if project == nil then
+      if unasked(why) then error("Update Rex to pick here; New Thread (⌃⌘N) picks a project too", 0) end
+      return
+    end
+    local name = project
+    for _, p in ipairs(projects) do if p.id == project then name = p.title end end
+    local places = items({ "workspaces", project })
+    local place = places[1].id
+    if #places > 1 then
+      place, why = rex.ui.pick{ title = name, placeholder = "Filter worktrees", confirm = "New Thread", items = places }
+      if place == nil then return end
+    end
+    local env, id = project:match("^([^/]+)/(.+)$")
+    compose({ "--env", env, "--project", id, "--workspace", place })
   end,
 }
 
--- Every thread on every machine, settled, snoozed and archived too, in a floating list: Enter
--- brings one back to its tab, Option+Enter opens it in T3 (Rex keeps Cmd+Enter).
+-- Every thread on every machine, settled, snoozed and archived too: Enter brings one back to
+-- its tab. In the palette where Rex can ask; else in tr3x's floating list, where Option+Enter
+-- opens it in T3 (Rex keeps Cmd+Enter).
 rex.action{
   name = "t3_find",
   title = "Find Thread…",
   category = "T3 Code",
-  keywords = "t3 search settled snoozed archived closed reopen restore history",
+  keywords = "t3 search go switch jump settled snoozed archived closed reopen restore history",
   run = function(ctx)
-    local _, err = rex.session.new_layer{ session_id = ctx.session_id, bounds = { 0.2, 0.2, 0.6, 0.6 }, focus = true,
-      layout = { block = { flavor = "com.superlogical.terminal.shell", label = "Find Thread",
-        options = { shell = "none", login = false, command = pane({ "find", "--client", ctx.client_id }) } } } }
-    rex.session.disown_block{ session_id = ctx.session_id }
-    if err then error(err, 0) end
+    if native() then
+      local key, why = rex.ui.pick{ title = "Find Thread", placeholder = "Filter threads", confirm = "Go",
+        items = items({ "find", "--items" }) }
+      if key ~= nil then
+        local target = rex.json.decode(tr3x({}, { "find", "--go", key }))
+        if target and target.session_id then rex.client.queue("session.select", target) end
+        return
+      end
+      if not unasked(why) then return end
+    end
+    layer(ctx, "Find Thread", { 0.2, 0.2, 0.6, 0.6 }, { "find", "--client", ctx.client_id })
   end,
 }
 
@@ -181,10 +304,11 @@ rex.action{
   run = function(ctx) tr3x({}, { "reopen", "--client", ctx.client_id }) end,
 }
 
--- Four keys, for what you reach for from anywhere. Everything else is in the palette under T3 Code
+-- Five keys, for what you reach for from anywhere. Everything else is in the palette under T3 Code
 -- and in Reply's `/` commands; bind any of it yourself in init.lua.
 rex.bind("ctrl+cmd+i", "t3_inbox")
 rex.bind("ctrl+cmd+n", "t3_new")
+rex.bind("ctrl+cmd+o", "t3_project")
 rex.bind("ctrl+cmd+[", "t3_parent")
 rex.bind("ctrl+cmd+]", "t3_child")
 

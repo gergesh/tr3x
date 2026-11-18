@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use crossterm::event::{
     Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
@@ -1453,7 +1453,159 @@ fn check(env: Arc<Env>, tx: mpsc::UnboundedSender<Loaded>) {
     });
 }
 
-pub async fn run(welcome: bool, env: Option<String>) -> Result<()> {
+/// Where Open Project… asks a new thread to start: a project, by id, and the workspace it
+/// picked, `local`, `new` or `worktree:<path>`.
+pub struct Start {
+    pub project: Option<String>,
+    pub workspace: Option<String>,
+}
+
+/// The workspace a `--workspace` names.
+fn workspace_mode(text: &str) -> Option<Mode> {
+    match text {
+        "local" => Some(Mode::Local),
+        "new" => Some(Mode::New),
+        _ => text
+            .strip_prefix("worktree:")
+            .filter(|p| !p.is_empty())
+            .map(|p| Mode::Existing(p.to_string())),
+    }
+}
+
+/// The projects on every paired machine that answers, as `rex.ui.pick` items, most recent
+/// work first on each machine: `env/project`, its folder under it, and when it was last
+/// worked in.
+pub async fn print_projects() -> Result<()> {
+    let hub = t3::hub();
+    let badges = hub.paired() >= 2;
+    let now = t3::now_ms();
+    let loads = hub.envs().iter().map(|env| {
+        let env = env.clone();
+        async move {
+            let shell = tokio::time::timeout(std::time::Duration::from_secs(8), env.shell()).await;
+            (env, shell)
+        }
+    });
+    let mut items = Vec::new();
+    for (env, shell) in futures_util::future::join_all(loads).await {
+        let Ok(Ok(shell)) = shell else { continue };
+        let (projects, recent) = projects_by_recent(&shell);
+        for p in projects {
+            let Some(id) = p["id"].as_str() else { continue };
+            items.push(project_item(&env, &p, recent.get(id), badges, now));
+        }
+    }
+    if items.is_empty() {
+        bail!("no projects: T3 didn't answer, or has none yet");
+    }
+    println!("{}", Value::Array(items));
+    Ok(())
+}
+
+fn project_item(
+    env: &Env,
+    project: &Value,
+    recent: Option<&Value>,
+    badge: bool,
+    now: i64,
+) -> Value {
+    let id = project["id"].as_str().unwrap_or_default();
+    let root = project["workspaceRoot"].as_str().unwrap_or_default();
+    let title = project["title"]
+        .as_str()
+        .filter(|t| !t.is_empty())
+        .unwrap_or(id);
+    let mut subtitle = crate::chat::short_home(root);
+    if badge {
+        subtitle = format!("{subtitle} · {}", env.name());
+    }
+    let detail = recent
+        .and_then(|t| t["updatedAt"].as_str())
+        .and_then(t3client::inbox::parse_iso)
+        .map(|at| crate::find::ago(at, now))
+        .unwrap_or_default();
+    json!({
+        "id": format!("{}/{id}", env.id()),
+        "title": title,
+        "subtitle": subtitle,
+        "detail": detail,
+        "icon": "folder",
+    })
+}
+
+/// Where a new thread in `key` (`env/project`) can work, as `rex.ui.pick` items: the project's
+/// folder, each worktree it has, and a new worktree, the project's default first.
+pub async fn print_workspaces(key: &str) -> Result<()> {
+    let (env_id, project_id) = key
+        .split_once('/')
+        .context("name the project as env/project")?;
+    let env = t3::machine(env_id)?;
+    let (config, shell) = tokio::try_join!(env.server_config(), env.shell())?;
+    let project = shell
+        .projects
+        .iter()
+        .find(|p| p["id"] == project_id)
+        .cloned()
+        .with_context(|| format!("no project {project_id} on {}", env.name()))?;
+    let root = project["workspaceRoot"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let listed = env
+        .rpc()
+        .await?
+        .call(
+            "vcs.listRefs",
+            json!({"cwd": root, "limit": 100, "refKind": "local"}),
+            std::time::Duration::from_secs(15),
+        )
+        .await;
+    let (refs, repo) = match listed {
+        Ok(r) => (
+            r["refs"].as_array().cloned().unwrap_or_default(),
+            r["isRepo"].as_bool().unwrap_or(true),
+        ),
+        Err(_) => (Vec::new(), true),
+    };
+    let items = workspace_items(&root, &refs, repo, starts_in_worktree(&config, &project));
+    println!("{}", Value::Array(items));
+    Ok(())
+}
+
+fn workspace_items(root: &str, refs: &[Value], repo: bool, worktree_first: bool) -> Vec<Value> {
+    let local = json!({"id": "local", "title": "Project folder",
+        "subtitle": crate::chat::short_home(root), "icon": "folder"});
+    let base = refs
+        .iter()
+        .find(|r| r["isDefault"] == true)
+        .or_else(|| refs.iter().find(|r| r["current"] == true))
+        .and_then(|r| r["name"].as_str());
+    let new = json!({"id": "new", "title": "New worktree",
+        "subtitle": base.map(|b| format!("from {b}")).unwrap_or_default(), "icon": "plus"});
+    let existing = worktrees(refs, Some(root))
+        .into_iter()
+        .map(|(path, branch)| {
+            json!({"id": format!("worktree:{path}"), "title": branch,
+            "subtitle": crate::chat::short_home(path), "icon": "branch"})
+        });
+    let mut items = Vec::new();
+    match (repo, worktree_first) {
+        (false, _) => items.push(local),
+        (true, false) => {
+            items.push(local);
+            items.extend(existing);
+            items.push(new);
+        }
+        (true, true) => {
+            items.push(new);
+            items.extend(existing);
+            items.push(local);
+        }
+    }
+    items
+}
+
+pub async fn run(welcome: bool, env: Option<String>, start: Start) -> Result<()> {
     let (client, config, shell) = connect(env.as_deref().unwrap_or("")).await?;
     // The scheme first, so the logos loaded next are for the screen they're seen on.
     let mut scheme = crate::scheme::listen();
@@ -1469,6 +1621,14 @@ pub async fn run(welcome: bool, env: Option<String>) -> Result<()> {
         (cols as usize, rows as usize),
     );
     ui.load(config, &shell);
+    if let Some(project) = start.project
+        && ui.projects.iter().any(|p| p["id"] == project.as_str())
+    {
+        ui.set_project(project);
+        if let Some(mode) = start.workspace.as_deref().and_then(workspace_mode) {
+            ui.mode = mode;
+        }
+    }
     for m in machines {
         check(m, tx.clone());
     }
@@ -1665,6 +1825,42 @@ pub async fn logos(providers: &[Value]) -> HashMap<String, Icon> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn workspaces_list_the_default_first() {
+        let refs = vec![
+            json!({"name": "main", "worktreePath": "/src/app", "isDefault": true}),
+            json!({"name": "fix/build", "worktreePath": "/src/app-wt/fix"}),
+        ];
+        let ids = |items: Vec<Value>| -> Vec<String> {
+            items
+                .iter()
+                .map(|i| i["id"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(
+            ids(workspace_items("/src/app", &refs, true, false)),
+            ["local", "worktree:/src/app-wt/fix", "new"]
+        );
+        assert_eq!(
+            ids(workspace_items("/src/app", &refs, true, true)),
+            ["new", "worktree:/src/app-wt/fix", "local"]
+        );
+        assert_eq!(
+            ids(workspace_items("/src/app", &[], false, true)),
+            ["local"]
+        );
+        assert_eq!(
+            workspace_items("/src/app", &refs, true, false)[2]["subtitle"],
+            "from main"
+        );
+        assert_eq!(
+            workspace_mode("worktree:/src/x"),
+            Some(Mode::Existing("/src/x".into()))
+        );
+        assert_eq!(workspace_mode("new"), Some(Mode::New));
+        assert_eq!(workspace_mode("worktree:"), None);
+    }
 
     /// Each branch checked out outside the project's folder is a worktree to pick, once.
     #[test]

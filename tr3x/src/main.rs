@@ -104,9 +104,14 @@ enum Command {
         /// script. `-` reads it from standard input.
         #[arg(long)]
         prompt: Option<String>,
-        /// With --prompt: the project, by name or id. Default: the one worked in last.
-        #[arg(long, requires = "prompt")]
+        /// The project, by name or id. Default: the one worked in last. Without --prompt, by
+        /// id: the composer starts on it.
+        #[arg(long)]
         project: Option<String>,
+        /// Without --prompt: where the composer's thread starts, `local`, `new` or
+        /// `worktree:<path>`.
+        #[arg(long, conflicts_with = "prompt", hide = true)]
+        workspace: Option<String>,
         /// With --prompt: the project whose folder holds this one, made a project if none does.
         #[arg(long, requires = "prompt", conflicts_with = "project")]
         folder: Option<std::path::PathBuf>,
@@ -131,7 +136,25 @@ enum Command {
         /// The Rex client that asked, which goes to the thread's tab.
         #[arg(long)]
         client: Option<String>,
+        /// Print every thread as `rex.ui.pick` items, for the palette's Go to Thread….
+        #[arg(long, conflicts_with = "go")]
+        items: bool,
+        /// Bring this thread (`env/thread`) back and print where its tab is.
+        #[arg(long)]
+        go: Option<String>,
     },
+    /// Print the thread's title, for the palette's Rename Thread….
+    #[command(hide = true)]
+    Title(Target),
+    /// Print the Rex config `install` writes, for this binary, for working on it.
+    #[command(hide = true)]
+    Lua,
+    /// Print every project on every machine as `rex.ui.pick` items, for Open Project….
+    #[command(hide = true)]
+    Projects,
+    /// Print where a new thread in a project (`env/project`) can work, as `rex.ui.pick` items.
+    #[command(hide = true)]
+    Workspaces { project: String },
     /// Bring back the thread settled last, and go to its tab.
     #[command(hide = true)]
     Reopen {
@@ -609,7 +632,30 @@ async fn run(cli: Cli) -> Result<()> {
             chat::run(thread, passive, role).await
         }
         Command::Compose { thread, passive } => chat::run(thread, passive, chat::Role::Reply).await,
-        Command::Find { client } => find::run(client).await,
+        Command::Find { items: true, .. } => find::print_items().await,
+        Command::Find { go: Some(key), .. } => find::go(&key).await,
+        Command::Find { client, .. } => find::run(client).await,
+        Command::Title(t) => {
+            let (env, r) = t3::thread(&t.resolve().await?)?;
+            let current = shell_thread(&env, &r.thread).await;
+            println!(
+                "{}",
+                current
+                    .as_ref()
+                    .and_then(|t| t["title"].as_str())
+                    .unwrap_or_default()
+            );
+            Ok(())
+        }
+        Command::Lua => {
+            print!(
+                "{}",
+                install::lua(&std::env::current_exe()?, &Rex::find().bin)
+            );
+            Ok(())
+        }
+        Command::Projects => new::print_projects().await,
+        Command::Workspaces { project } => new::print_workspaces(&project).await,
         Command::Reopen { client } => find::reopen_last(client).await,
         Command::New {
             prompt: Some(prompt),
@@ -635,7 +681,13 @@ async fn run(cli: Cli) -> Result<()> {
             })
             .await
         }
-        Command::New { welcome, env, .. } => new::run(welcome, env).await,
+        Command::New {
+            welcome,
+            env,
+            project,
+            workspace,
+            ..
+        } => new::run(welcome, env, new::Start { project, workspace }).await,
         Command::Pick { thread, field } => pick::run(thread, field).await,
         Command::Model(t) => {
             let thread = t.resolve().await?;

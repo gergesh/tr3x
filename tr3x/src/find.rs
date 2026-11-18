@@ -87,13 +87,7 @@ impl Found {
     /// What the list sorts on, newest first: the latest change, the wake (soonest first, as a
     /// negative), or when it was settled or archived.
     fn when(&self) -> i64 {
-        let at = |key: &str| t3client::inbox::parse_iso(self.thread[key].as_str().unwrap_or(""));
-        match self.group {
-            Group::Open => at("updatedAt").unwrap_or(0),
-            Group::Snoozed => -at("snoozedUntil").unwrap_or(0),
-            Group::Settled => t3client::inbox::settled_ms(&self.thread),
-            Group::Archived => at("archivedAt").unwrap_or(0),
-        }
+        when(self.group, &self.thread)
     }
 
     /// The right column: the project, when it wakes, or how long ago it was put away.
@@ -106,13 +100,25 @@ impl Found {
     }
 }
 
+/// What the list sorts on, newest first: the latest change, the wake (soonest first, as a
+/// negative), or when it was settled or archived.
+fn when(group: Group, thread: &Value) -> i64 {
+    let at = |key: &str| t3client::inbox::parse_iso(thread[key].as_str().unwrap_or(""));
+    match group {
+        Group::Open => at("updatedAt").unwrap_or(0),
+        Group::Snoozed => -at("snoozedUntil").unwrap_or(0),
+        Group::Settled => t3client::inbox::settled_ms(thread),
+        Group::Archived => at("archivedAt").unwrap_or(0),
+    }
+}
+
 /// `until 3pm`, `until tomorrow 9am`, `until Tue 9am` or `until 12 Nov`, in local time.
 fn until(at: i64, now: i64, offset_minutes: i64) -> String {
     format!("until {}", crate::chat::when(at, now, offset_minutes))
 }
 
 /// `just now`, `5m ago`, `3h ago`, `2d ago`, `6w ago`, `1y ago`.
-fn ago(at: i64, now: i64) -> String {
+pub(crate) fn ago(at: i64, now: i64) -> String {
     let minutes = (now - at).max(0) / 60_000;
     match minutes {
         0 => "just now".into(),
@@ -224,38 +230,44 @@ async fn bring_back(env: &Env, thread: &Value, client: Option<&str>) -> Result<(
     go_to(&key, client).await
 }
 
-/// Waits for sync to give `key` a window, then selects it on `client`, else on every app.
-pub async fn go_to(key: &str, client: Option<&str>) -> Result<()> {
+/// Waits for sync to give `key` a window: its session and window.
+async fn window_of(key: &str) -> Result<(String, String)> {
     for _ in 0..60 {
         let state = State::load();
         let found = state
             .groups
             .values()
             .find_map(|g| Some((g.session_id.clone()?, g.windows.get(key)?.window_id.clone())));
-        if let Some((session, window)) = found {
-            let rex = Rex::find();
-            let pairs = [
-                ("session_id", session.as_str()),
-                ("window_id", window.as_str()),
-            ];
-            return match client {
-                Some(client) => {
-                    let kv: Vec<String> = pairs.iter().map(|(k, v)| format!("{k}={v}")).collect();
-                    let mut args = vec!["-C", client, "do", "session.select"];
-                    args.extend(kv.iter().map(String::as_str));
-                    let _ = tokio::process::Command::new(&rex.bin)
-                        .args(crate::rex::NO_AUTOSTART)
-                        .args(&args)
-                        .output()
-                        .await;
-                    Ok(())
-                }
-                None => rex.client_do("session.select", &pairs).await,
-            };
+        if let Some(found) = found {
+            return Ok(found);
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
     bail!("sync hasn't made its tab yet");
+}
+
+/// Waits for sync to give `key` a window, then selects it on `client`, else on every app.
+pub async fn go_to(key: &str, client: Option<&str>) -> Result<()> {
+    let (session, window) = window_of(key).await?;
+    let rex = Rex::find();
+    let pairs = [
+        ("session_id", session.as_str()),
+        ("window_id", window.as_str()),
+    ];
+    match client {
+        Some(client) => {
+            let kv: Vec<String> = pairs.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            let mut args = vec!["-C", client, "do", "session.select"];
+            args.extend(kv.iter().map(String::as_str));
+            let _ = tokio::process::Command::new(&rex.bin)
+                .args(crate::rex::NO_AUTOSTART)
+                .args(&args)
+                .output()
+                .await;
+            Ok(())
+        }
+        None => rex.client_do("session.select", &pairs).await,
+    }
 }
 
 /// Whether `client` is an app on this Mac, so opening T3 Code here opens it in front of them.
@@ -272,6 +284,171 @@ async fn is_here(client: Option<&str>) -> bool {
         .flatten()
         .find(|c| c["client_id"] == client)
         .is_some_and(|c| c["principal"]["transport"] == "unix")
+}
+
+/// The most a Rex prompt lists.
+const PROMPT_ITEMS: usize = 2000;
+
+/// Every thread on every machine, each once, as the finder loads them: the shell's first. Gives
+/// up on a machine that hasn't finished after `wait`, keeping what came.
+async fn collect(wait: Duration) -> Vec<Found> {
+    let hub = t3::hub();
+    let badges = hub.paired() >= 2;
+    let home = hub.home_id().map(str::to_string);
+    let (tx, mut loaded) = mpsc::unbounded_channel();
+    let mut loading = hub.envs().len();
+    for env in hub.envs() {
+        tokio::spawn(load(env.clone(), tx.clone()));
+    }
+    drop(tx);
+    let mut found: Vec<Found> = Vec::new();
+    let mut at: HashMap<String, usize> = HashMap::new();
+    let mut projects: HashMap<(String, String), String> = HashMap::new();
+    let deadline = tokio::time::Instant::now() + wait;
+    while loading > 0 {
+        let page = match tokio::time::timeout_at(deadline, loaded.recv()).await {
+            Ok(Some(page)) => page,
+            _ => break,
+        };
+        let Loaded::Threads(env, threads, more) = page else {
+            loading -= 1;
+            continue;
+        };
+        for p in more {
+            if let (Some(id), Some(title)) = (p["id"].as_str(), p["title"].as_str()) {
+                projects.insert((env.id().to_string(), id.to_string()), title.to_string());
+            }
+        }
+        let now = t3::now_ms();
+        for thread in threads {
+            if thread["lineage"]["relationshipToParent"] == "subagent"
+                || !thread["deletedAt"].is_null()
+            {
+                continue;
+            }
+            let project = projects
+                .get(&(
+                    env.id().to_string(),
+                    thread["projectId"].as_str().unwrap_or_default().to_string(),
+                ))
+                .cloned()
+                .unwrap_or_default();
+            let badge = badges && Some(env.id()) != home.as_deref();
+            let project = match (badge, project.is_empty()) {
+                (true, true) => env.name().to_string(),
+                (true, false) => format!("{project} · {}", env.name()),
+                _ => project,
+            };
+            let f = Found {
+                env: env.clone(),
+                group: Group::of(&thread, now),
+                thread,
+                project,
+            };
+            if let std::collections::hash_map::Entry::Vacant(slot) = at.entry(f.key()) {
+                slot.insert(found.len());
+                found.push(f);
+            }
+        }
+    }
+    found
+}
+
+/// The finder's list as Rex's `rex.ui.pick` takes it: by group, newest first in each, with
+/// the group and project under the title and the time at the end.
+fn prompt_items(found: &[Found], now: i64, offset_minutes: i64) -> Vec<Value> {
+    let mut order: Vec<&Found> = found.iter().collect();
+    order.sort_by_key(|f| (f.group, std::cmp::Reverse(f.when())));
+    order
+        .into_iter()
+        .take(PROMPT_ITEMS)
+        .map(|f| prompt_item(f.key(), &f.thread, f.group, &f.project, now, offset_minutes))
+        .collect()
+}
+
+/// One thread in the palette's list.
+fn prompt_item(
+    key: String,
+    thread: &Value,
+    group: Group,
+    project: &str,
+    now: i64,
+    offset_minutes: i64,
+) -> Value {
+    let title = crate::sync::label(thread["title"].as_str().unwrap_or(""));
+    let at = when(group, thread);
+    let (icon, detail) = match group {
+        Group::Open if thread["pinnedAt"].is_string() => ("star", ago(at, now)),
+        Group::Open => ("terminal", ago(at, now)),
+        Group::Snoozed => ("clock", until(-at, now, offset_minutes)),
+        Group::Settled => ("tag", ago(at, now)),
+        Group::Archived => ("package", ago(at, now)),
+    };
+    let subtitle = match project {
+        "" => group.title().to_string(),
+        project => format!("{} · {project}", group.title()),
+    };
+    json!({
+        "id": key,
+        "title": if title.is_empty() { "Untitled".into() } else { title },
+        "subtitle": subtitle,
+        "detail": detail,
+        "icon": icon,
+    })
+}
+
+/// `find --items`: every thread, for the palette's Go to Thread… to list.
+pub async fn print_items() -> Result<()> {
+    let found = collect(Duration::from_secs(12)).await;
+    let items = prompt_items(&found, t3::now_ms(), crate::chat::local_offset_minutes());
+    println!("{}", Value::Array(items));
+    Ok(())
+}
+
+/// The thread `key` names, as T3 has it: in the shell, else archived, else settled long
+/// enough ago that only its id is to hand.
+async fn thread_value(env: &Env, id: &str) -> Value {
+    if let Ok(shell) = env.shell().await
+        && let Some(t) = t3client::inbox::find_thread(&shell, id)
+    {
+        return t.clone();
+    }
+    if let Ok(archive) = env
+        .call("orchestration.getArchivedShellSnapshot", json!({}))
+        .await
+        && let Some(t) = archive["threads"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|t| t["id"] == id)
+    {
+        return t.clone();
+    }
+    json!({"id": id, "settledOverride": "settled"})
+}
+
+/// `find --go`: brings `key` back as Enter in the finder does, and prints where its tab is, as
+/// Rex's `session.select` takes it, for the action to select on the device that asked.
+pub async fn go(key: &str) -> Result<()> {
+    let (env, r) = t3::thread(key)?;
+    let thread = thread_value(&env, &r.thread).await;
+    if !thread["archivedAt"].is_null() {
+        let command = json!({"type": "thread.unarchive", "commandId": format!("tr3x:{}", uuid::Uuid::new_v4()), "threadId": r.thread});
+        env.dispatch(command).await?;
+    }
+    if t3client::inbox::effective_snoozed(&thread, t3::now_ms()) {
+        env.dispatch(t3::command(&r.thread, &Lifecycle::Wake))
+            .await?;
+    }
+    if thread["settledOverride"] == "settled" {
+        env.dispatch(t3::command(&r.thread, &Lifecycle::Unsettle))
+            .await?;
+    }
+    let key = r.to_string();
+    crate::sync::restore(&key)?;
+    let (session, window) = window_of(&key).await?;
+    println!("{}", json!({"session_id": session, "window_id": window}));
+    Ok(())
 }
 
 /// Reopen Last Settled: the thread settled last, on any machine, back in its tab.
@@ -541,6 +718,31 @@ mod tests {
         assert_eq!(ago(now - 3 * h, now), "3h ago");
         assert_eq!(ago(now - 50 * h, now), "2d ago");
         assert_eq!(ago(now - 15 * 24 * h, now), "2w ago");
+    }
+
+    #[test]
+    fn prompt_items_carry_group_project_and_time() {
+        let now = t3client::inbox::parse_iso("2026-10-31T00:00:00.000Z").unwrap();
+        let open = json!({"id": "b", "title": "", "updatedAt": "2026-10-30T23:55:00.000Z"});
+        let item = prompt_item("e/b".into(), &open, Group::Open, "", now, 0);
+        assert_eq!(item["title"], "Untitled");
+        assert_eq!(item["subtitle"], "Open");
+        assert_eq!(item["icon"], "terminal");
+        assert_eq!(item["detail"], "5m ago");
+        let snoozed =
+            json!({"id": "s", "title": "Later", "snoozedUntil": "2026-10-31T15:00:00.000Z"});
+        let item = prompt_item("e/s".into(), &snoozed, Group::Snoozed, "app", now, 0);
+        assert_eq!(item["subtitle"], "Snoozed · app");
+        assert_eq!(item["icon"], "clock");
+        assert_eq!(item["detail"], "until 3pm");
+        let archived =
+            json!({"id": "a", "title": "Gone", "archivedAt": "2026-10-28T00:00:00.000Z"});
+        let item = prompt_item("e/a".into(), &archived, Group::Archived, "app", now, 0);
+        assert_eq!(
+            (item["icon"].as_str(), item["detail"].as_str()),
+            (Some("package"), Some("3d ago"))
+        );
+        assert_eq!(item["id"], "e/a");
     }
 
     #[test]

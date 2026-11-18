@@ -179,8 +179,16 @@ Every action on a thread is one entry in `tr3x/src/actions.rs`: a palette action
 `tr3x.lua` (`@ACTIONS@`); Reply's `/` menu reads the rest. An entry can name the capability
 T3 needs for it (`threadForceStop`, `threadTitleRegeneration`): Reply leaves it out of `/` on a
 machine whose T3 lacks it, and the palette's action says to update T3 there. An action that
-asks first, Rename Thread… and Delete Thread…, runs in a floating layer (`prompt.rs`); `/delete`
-takes two in a row.
+asks first, Rename Thread… and Delete Thread…, asks in Rex's command palette (`rex.ui.input`,
+`rex.ui.pick`), which every connected Rex app shows and the first to answer wins. Where Rex
+can't (`rex.ui` missing, or `unsupported` from an app older than API revision 17), it runs in a
+floating layer instead (`prompt.rs`); `/delete` takes two in a row.
+
+The palette's lists come from tr3x as `rex.ui` items, JSON on standard output: `tr3x find
+--items`, `tr3x projects`, and `tr3x workspaces <env/project>` (the project's folder, the
+worktrees `vcs.listRefs` reports checked out elsewhere, and a new worktree, the project's
+default first). **Open Project…** then opens New Thread with `--project` and `--workspace`.
+`tr3x lua` prints the config `install` writes, for working on it.
 
 Each sends what T3's own menu sends: `thread.metadata.update` with a title or
 `regenerateTitle`, `thread.fork` from the thread's latest stable point, `thread.delete`,
@@ -243,7 +251,9 @@ for its notice.
 
 ## Find Thread
 
-**Find Thread…** opens `tr3x find` in a floating layer. It reads each machine's shell, its
+**Find Thread…** lists `tr3x find --items` in Rex's palette, and `tr3x find --go` brings the
+pick back and prints its tab for the action to select on the device that asked. Without
+`rex.ui` it opens `tr3x find` in a floating layer. Either way it reads each machine's shell, its
 archived threads (`orchestration.getArchivedShellSnapshot`) and its older settled threads
 (`orchestration.getOlderSettledThreads`, 50 a page, up to a thousand), and lists them as they
 come. Enter unarchives (`thread.unarchive`), wakes or unsettles the thread as it needs, then
