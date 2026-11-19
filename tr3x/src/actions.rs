@@ -3,8 +3,9 @@
 //! `tr3x.lua` and Reply's `/` menu reads the rest, so a new action is one entry here, plus what
 //! it does in `main.rs` (the palette) and `compose.rs` (Reply).
 //!
-//! Actions that need more than the focused thread (New Thread, Find Thread…, Fit to This
-//! Device, pairing, sessions, Open Thread in T3 Code) are written out in `rex/tr3x.lua`.
+//! Actions that need more than the focused thread (New Thread, Open Project…, Answer…,
+//! Find Thread…, Snooze Thread…, Fit to This Device, pairing, sessions, Open Thread in T3 Code)
+//! are written out in `rex/tr3x.lua`.
 
 pub struct Action {
     /// The Rex action's name, `t3_…`, which `rex.bind` takes. Empty: Reply only.

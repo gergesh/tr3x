@@ -246,7 +246,7 @@ fn remove_require(dir: &Path) -> Result<()> {
 
 /// The Rex config tr3x adds, pointing at this binary, this Rex, this T3 and this state
 /// directory.
-fn lua(bin: &Path, rex: &Path) -> String {
+pub(crate) fn lua(bin: &Path, rex: &Path) -> String {
     LUA.replace("@TR3X@", &bin.to_string_lossy())
         .replace("@REX@", &rex.to_string_lossy())
         .replace(
