@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.5
+
 - Threads on a machine running T3 0.1.10 or later show again. Sync dropped and reopened its feed from that machine every few seconds (`a chunk would go over the limit of 1 chunk` in the log), as that T3 sends several updates before it waits for tr3x to take them.
 - Rex's Activity list says what a working thread is doing: the program its latest command runs (`$ pnpm test`), the file it edits or the tool it uses, else the start of what it's writing. It said `project · Working`. The rest of a command stays in the thread, since the line shows on every device.
 - A thread on a machine paired over SSH forwards each `localhost` port its latest reply links to onto the same port on this Mac, once a web server answers there, so the link opens as written. On a laptop or phone, Rex's ⌘-click forwarding carries it the rest of the way. A port already in use here, and the ports databases and Docker use, are left alone. The forwards close with the tab.
