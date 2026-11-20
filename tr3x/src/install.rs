@@ -564,7 +564,7 @@ pub async fn doctor() -> Result<()> {
     let sessions = rex.sessions().await;
     match &sessions {
         Ok(_) => step(true, "Rex server", &rex.bin.display().to_string()),
-        Err(e) => fail("Rex server", &format!("{e:#}"), "Open Rex Beta."),
+        Err(e) => fail("Rex server", &format!("{e:#}"), "Open Rex."),
     }
     if sessions.is_ok()
         && let Ok((cli, server)) = rex.versions().await
@@ -574,7 +574,7 @@ pub async fn doctor() -> Result<()> {
             Err(detail) => {
                 mark(Mark::Warn, "Rex's server is older than the app", &detail);
                 println!(
-                    "  Run `rex server stop`, then open Rex Beta. Its server starts on the new version, and tr3x puts its tabs back."
+                    "  Run `rex server stop`, then open Rex. Its server starts on the new version, and tr3x puts its tabs back."
                 );
             }
         }

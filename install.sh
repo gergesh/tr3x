@@ -72,7 +72,11 @@ UNIT
 
 if [ "$OS" = Darwin ]; then
   CURL=/usr/bin/curl
-  REX_APP=${TR3X_REX_APP:-"/Applications/Rex Beta.app"}
+  REX_APP=${TR3X_REX_APP:-}
+  if [ -z "$REX_APP" ]; then
+    REX_APP="/Applications/Rex.app"
+    [ -d "$REX_APP" ] || [ ! -d "/Applications/Rex Beta.app" ] || REX_APP="/Applications/Rex Beta.app"
+  fi
   REX="$REX_APP/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"
   T3_APP=${TR3X_T3_APP:-}
   if [ -z "$T3_APP" ]; then
@@ -89,7 +93,7 @@ fi
 if [ -z "$REX" ] || [ ! -x "$REX" ]; then
   no "Rex isn't installed"
   if [ "$OS" = Darwin ]; then
-    say "  Get Rex Beta from https://www.superlogical.com/rex, open it once, then run this again."
+    say "  Get Rex from https://www.superlogical.com/rex, open it once, then run this again."
   else
     say "  Install it with: curl -fsSL https://pkgs.superlogical.com/rex/install.sh | sh"
     say "  (it asks for sudo), then run this again."
@@ -101,7 +105,7 @@ if [ "$OS" = Darwin ]; then
     open -a "$REX_APP"
     i=0; while ! "$REX" ls >/dev/null 2>&1; do i=$((i+1)); [ $i -gt 30 ] && break; sleep 1; done
   fi
-  "$REX" ls >/dev/null 2>&1 || { no "Rex is installed but its server isn't answering"; say "  Open Rex Beta and finish its setup, then run this again."; exit 1; }
+  "$REX" ls >/dev/null 2>&1 || { no "Rex is installed but its server isn't answering"; say "  Open Rex and finish its setup, then run this again."; exit 1; }
 else
   # A machine that stays on keeps its Rex server as a service of its own, so it outlives
   # every login and every terminal.

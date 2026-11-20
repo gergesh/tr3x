@@ -21,7 +21,7 @@ sync is running and what it last logged, and the session. Every ✗ prints its f
 exits non-zero. Run it before guessing, and again after a fix to confirm it.
 
 No `tr3x` on the PATH means it isn't installed, or `~/.local/bin` isn't on the PATH. Install
-with the one command below. It needs a Mac (Rex Beta) or Linux (Rex), and T3 Code running with
+with the one command below. It needs a Mac (Rex) or Linux (Rex), and T3 Code running with
 a project. Never use sudo; nothing tr3x does needs it.
 
 ```sh
@@ -78,7 +78,8 @@ Thread actions take `--thread <env/thread>` or a thread id on this Mac. Inside a
   state on every change, and a token edited by hand stops working. To restart sync, run
   `rex config reload`: the config starts it. ⌃⌘I and ⌃⌘N also start it if it's down. Outside
   a Rex pane `rex` isn't on the PATH on a Mac; it's
-  `/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex`. On Linux it's
+  `/Applications/Rex.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex` (`Rex Beta.app`
+  on older installs). On Linux it's
   `rex`.
 - **Closing a tab settles its thread.** Don't close tr3x's windows with `rex` to tidy up.
   Use `tr3x snooze` to put one away, or leave it.
