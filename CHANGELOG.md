@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.6
+
 - Works with Rex, not only Rex Beta. Once Rex replaced Rex Beta, sync couldn't reach Rex, so `/settle`, `/snooze` and `/archive` left the thread's tab open, and new threads got no tab. A running sync now finds Rex again without a restart.
 
 ## 0.1.5
