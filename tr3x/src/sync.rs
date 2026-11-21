@@ -914,7 +914,7 @@ impl Syncer {
             return;
         }
         let exe = self.exe.to_string_lossy().into_owned();
-        let child = tokio::process::Command::new(&self.rex.bin)
+        let child = tokio::process::Command::new(self.rex.exe())
             .args(crate::rex::NO_AUTOSTART)
             .args(["do", "-s", session, "-"])
             .stdin(std::process::Stdio::piped())

@@ -11,12 +11,15 @@ use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
+/// The copy in the Mac app: Rex, else Rex Beta, which Rex replaced.
 #[cfg(target_os = "macos")]
-const BUNDLED: &str =
-    "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex";
+const BUNDLED: [&str; 2] = [
+    "/Applications/Rex.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex",
+    "/Applications/Rex Beta.app/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex",
+];
 /// On Linux, Rex's package puts `rex` on the `PATH`.
 #[cfg(not(target_os = "macos"))]
-const BUNDLED: &str = "/usr/bin/rex";
+const BUNDLED: [&str; 1] = ["/usr/bin/rex"];
 
 /// Never start a Rex server of our own: one that has stopped is Rex quitting, and sync waits
 /// for the app's to come back.
@@ -29,24 +32,41 @@ pub struct Rex {
 
 impl Rex {
     /// `$TR3X_REX`, else Rex's own copy (`$REX_BIN_DIR`, set in Rex terminals), else `rex` on
-    /// `PATH`, else the copy in the app bundle.
+    /// `PATH`, else the copy in the app bundle. One that isn't there is skipped: the config
+    /// written for Rex Beta names a `TR3X_REX` that Rex took away.
     pub fn find() -> Rex {
         let from_env = std::env::var_os("TR3X_REX").map(PathBuf::from);
         let from_rex = std::env::var_os("REX_BIN_DIR").map(|dir| PathBuf::from(dir).join("rex"));
-        let on_path = std::env::var_os("PATH").and_then(|paths| {
-            std::env::split_paths(&paths)
-                .map(|dir| dir.join("rex"))
-                .find(|p| p.is_file())
-        });
+        let on_path = std::env::var_os("PATH")
+            .map(|paths| {
+                std::env::split_paths(&paths)
+                    .map(|dir| dir.join("rex"))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         let bin = from_env
-            .or(from_rex.filter(|p| p.is_file()))
-            .or(on_path)
-            .unwrap_or_else(|| PathBuf::from(BUNDLED));
+            .into_iter()
+            .chain(from_rex)
+            .chain(on_path)
+            .chain(BUNDLED.map(PathBuf::from))
+            .find(|p| p.is_file())
+            .unwrap_or_else(|| PathBuf::from(BUNDLED[0]));
         Rex { bin }
     }
 
+    /// The `rex` to run now: the one found, or, once that's gone, as when Rex replaced Rex
+    /// Beta under a running sync, the one there is instead.
+    pub fn exe(&self) -> PathBuf {
+        if self.bin.is_file() {
+            self.bin.clone()
+        } else {
+            Rex::find().bin
+        }
+    }
+
     async fn run(&self, args: &[&str], stdin: Option<&str>) -> Result<String> {
-        let mut command = Command::new(&self.bin);
+        let bin = self.exe();
+        let mut command = Command::new(&bin);
         command
             .args(NO_AUTOSTART)
             .args(args)
@@ -60,7 +80,7 @@ impl Rex {
             .kill_on_drop(true);
         let mut child = command
             .spawn()
-            .with_context(|| format!("couldn't run {}", self.bin.display()))?;
+            .with_context(|| format!("couldn't run {}", bin.display()))?;
         let out = tokio::time::timeout(std::time::Duration::from_secs(15), async {
             if let (Some(text), Some(mut pipe)) = (stdin, child.stdin.take()) {
                 pipe.write_all(text.as_bytes()).await?;
@@ -393,7 +413,8 @@ pub fn lua_str(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{lua_str, owner_in};
+    use super::{Rex, lua_str, owner_in};
+    use std::path::PathBuf;
 
     #[test]
     fn owner_here_or_not() {
@@ -404,6 +425,14 @@ mod tests {
         assert_eq!(owner_in(&clients, "client:mini"), Some(true));
         assert_eq!(owner_in(&clients, "client:air"), Some(false));
         assert_eq!(owner_in(&clients, "client:gone"), None);
+    }
+
+    #[test]
+    fn a_rex_that_went_away_is_found_again() {
+        let gone = PathBuf::from("/Applications/Rex Beta (gone).app/rex");
+        let rex = Rex { bin: gone.clone() };
+        assert_ne!(rex.exe(), gone);
+        assert_ne!(Rex::find().bin, gone);
     }
 
     #[test]

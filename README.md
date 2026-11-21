@@ -32,7 +32,7 @@ its own: every message, approval and setting goes to T3.
 
 | | |
 | --- | --- |
-| **Needs** | A Mac or Linux machine, [Rex](https://www.superlogical.com/rex) (Rex Beta on a Mac), T3 Code running with at least one project |
+| **Needs** | A Mac or Linux machine, [Rex](https://www.superlogical.com/rex), T3 Code running with at least one project |
 | **Optional** | Chrome or Chromium for HTML previews; [sup](https://github.com/superultrainc/sup) for pull requests, which the drawer offers to add |
 
 ```sh

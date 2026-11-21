@@ -15,7 +15,9 @@ HERE=$(cd "$(dirname "$0")/.." && pwd)
 # else `rex` on PATH (Linux), else the copy in the Mac app. Checked before anything is built,
 # killed or deleted: without it the old sessions couldn't be closed, and deleting their state
 # would leave them running with nothing to find them by.
-BUNDLED="${TR3X_REX_APP:-/Applications/Rex Beta.app}/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"
+APP=${TR3X_REX_APP:-/Applications/Rex.app}
+[ -n "${TR3X_REX_APP:-}" ] || [ -d "$APP" ] || APP="/Applications/Rex Beta.app"
+BUNDLED="$APP/Contents/Helpers/Rex Server.rex/Contents/MacOS/rex"
 if [ -n "${TR3X_REX:-}" ]; then
   REX=$TR3X_REX
   [ -x "$REX" ] || { echo "dev-restart: TR3X_REX ($REX) isn't an executable Rex" >&2; exit 1; }

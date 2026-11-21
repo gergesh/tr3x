@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Works with Rex, not only Rex Beta. Once Rex replaced Rex Beta, sync couldn't reach Rex, so `/settle`, `/snooze` and `/archive` left the thread's tab open, and new threads got no tab. A running sync now finds Rex again without a restart.
+
 ## 0.1.5
 
 - Threads on a machine running T3 0.1.10 or later show again. Sync dropped and reopened its feed from that machine every few seconds (`a chunk would go over the limit of 1 chunk` in the log), as that T3 sends several updates before it waits for tr3x to take them.
