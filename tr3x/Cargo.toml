@@ -3,7 +3,7 @@ name = "tr3x"
 version = "0.1.6"
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/macnason/tr3x"
+repository = "https://github.com/gergesh/tr3x"
 publish = false
 description = "Rex as the interface to T3 Code: one Rex window per T3 thread."
 

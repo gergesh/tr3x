@@ -1,7 +1,7 @@
 #!/bin/sh
 # tr3x: your T3 Code threads, as tabs in Rex. One command:
 #
-#   curl -fsSL https://raw.githubusercontent.com/macnason/tr3x/master/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/gergesh/tr3x/master/install.sh | sh
 #   sh install.sh                        # from a clone, building with cargo
 #
 # On a Mac or on Linux. Checks that Rex and T3 Code are installed and running, gets the tr3x
@@ -10,7 +10,7 @@
 # sudo. `tr3x uninstall` undoes it.
 set -eu
 
-REPO=macnason/tr3x
+REPO=gergesh/tr3x
 OS=$(uname -s)
 case "$OS" in
   Darwin) NAME=tr3x-macos-universal ;;

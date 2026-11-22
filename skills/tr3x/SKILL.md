@@ -25,7 +25,7 @@ with the one command below. It needs a Mac (Rex) or Linux (Rex), and T3 Code run
 a project. Never use sudo; nothing tr3x does needs it.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/macnason/tr3x/master/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/gergesh/tr3x/master/install.sh | sh
 ```
 
 `install.sh` asks about other machines on the terminal. Without one, as in an agent's shell, it

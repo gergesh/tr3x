@@ -2,6 +2,11 @@
 
 Your [T3 Code](https://github.com/pingdotgg/t3code) threads, as tabs in [Rex](https://www.superlogical.com/rex).
 
+> A fork of [macnason/tr3x](https://github.com/macnason/tr3x) that stays light however many
+> threads you leave open: idle ones past a [tab budget](docs/usage.md#tabs) get no tab, panes
+> hidden from view let go of T3, and sync pushes what panes used to poll for. It updates from
+> this fork's releases, not upstream's.
+
 <a href="docs/assets/tr3x.mp4"><img src="docs/assets/tr3x.webp" width="100%" alt="The film: tr3x in 36 seconds"></a>
 
 T3 runs the agents. Rex is where you read and reply. Each open thread is a tab in one Rex
@@ -36,7 +41,7 @@ its own: every message, approval and setting goes to T3.
 | **Optional** | Chrome or Chromium for HTML previews; [sup](https://github.com/superultrainc/sup) for pull requests, which the drawer offers to add |
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/macnason/tr3x/master/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/gergesh/tr3x/master/install.sh | sh
 ```
 
 - Downloads the latest release, checks its SHA-256 and installs `~/.local/bin/tr3x`.
@@ -77,7 +82,7 @@ tr3x comes with a [skill](skills/tr3x/SKILL.md) for coding agents: install and c
 missing tab, pair a machine, change a setting, or settle, snooze and rename threads.
 
 ```sh
-npx skills add macnason/tr3x
+npx skills add gergesh/tr3x
 ```
 
 ## Docs

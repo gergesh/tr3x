@@ -19,7 +19,7 @@ keep running while every client is closed.
 Run the installer on it (T3 must be running there; on Linux, `t3 service install` keeps it up):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/macnason/tr3x/master/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/gergesh/tr3x/master/install.sh | sh
 ```
 
 - **Mac:** Rex is the app, and sync starts with it.
