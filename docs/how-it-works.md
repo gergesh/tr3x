@@ -20,6 +20,13 @@ machine it's paired with, and draws what T3 says into one Rex session.
   through `rex do`. A working thread's progress changes nothing a window shows, so it costs
   Rex nothing. Blocks are created and disowned in that same connection, so they size to
   whichever Rex app is looking at them.
+- The tab budget (`tabs.rs`, `park` in `sync.rs`) parks the idle open threads past its count,
+  least recently active first, and the ones not active within its idle window. Activity is the
+  latest of a thread's creation, reopening, latest run and last message. A parked thread's
+  window closes without settling it or counting as closed, and none is made for it, except the
+  one on screen, which stays until you leave it. Find Thread's restore marks a thread
+  `summoned` in `state.json`, which the budget skips until its window closes, or a minute
+  passes without T3 listing it.
 - The order is T3's own sidebar logic, a port of `Sidebar.logic.ts` and `threadInbox.ts`
   in `t3client`, over every machine's threads at once. A pinned thread stays put while it
   works, as in T3.
