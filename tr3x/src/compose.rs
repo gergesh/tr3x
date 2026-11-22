@@ -355,7 +355,9 @@ pub(crate) enum Done {
     Restore(String, Vec<Image>),
     /// A picture made ready to send.
     Picture(picture::Ready),
-    Config(Value),
+    /// The machine's config, shared with the task that follows it: it's large, and one copy is
+    /// enough.
+    Config(Arc<Value>),
     Logos(HashMap<String, Icon>),
     /// A link to open the thread with, on the device it's clicked on.
     Link(String),
@@ -395,7 +397,7 @@ pub(crate) struct Composer {
     /// What to say while the thread's machine is out of reach.
     pub(crate) offline: Option<String>,
     pub(crate) state: Option<ThreadState>,
-    pub(crate) config: Option<Value>,
+    pub(crate) config: Option<Arc<Value>>,
     pub(crate) editor: Editor,
     /// Answers to the pending question so far, by question id.
     pub(crate) answers: serde_json::Map<String, Value>,
@@ -411,6 +413,8 @@ pub(crate) struct Composer {
     pub(crate) rows: usize,
     pub(crate) column: (usize, usize),
     pub(crate) tx: mpsc::UnboundedSender<Done>,
+    /// Following the machine's config, while the pane is awake.
+    config_task: Option<tokio::task::AbortHandle>,
     pub(crate) logos: HashMap<String, Icon>,
     painter: Painter,
     /// Each chip's and button's screen row and columns, for clicks.
@@ -613,8 +617,34 @@ impl Composer {
         Some((chips.collect(), self.usage(self.column.1)))
     }
 
+    /// Stops following the machine's config, for a pane that dozes. Reply keeps the config it
+    /// has, and follows it again on `follow_config_again`.
+    pub(crate) fn stop_following_config(&mut self) {
+        if let Some(task) = self.config_task.take() {
+            task.abort();
+        }
+    }
+
+    /// Lets go of what T3 can send again, for a pane that dozes: the thread, the machine's
+    /// config and the providers' logos. What the user typed or attached stays.
+    pub(crate) fn forget(&mut self) {
+        self.stop_following_config();
+        self.state = None;
+        self.config = None;
+        self.logos = HashMap::new();
+        self.drawn.clear();
+        self.usage_drawn = None;
+    }
+
+    pub(crate) fn follow_config_again(&mut self) {
+        if self.config_task.is_none() {
+            let task = tokio::spawn(follow_config(self.client.clone(), self.tx.clone()));
+            self.config_task = Some(task.abort_handle());
+        }
+    }
+
     /// This thread as the picker, its draft, Open and PR name it: `environment/thread`.
-    fn thread_key(&self) -> String {
+    pub(crate) fn thread_key(&self) -> String {
         format!("{}/{}", self.client.id(), self.thread_id)
     }
 
@@ -691,7 +721,7 @@ impl Composer {
             } else {
                 &self.editor
             },
-            self.config.as_ref(),
+            self.config.as_deref(),
             self.state.as_ref().map(|s| s.thread()),
             &self.client.capabilities(),
         );
@@ -1358,7 +1388,7 @@ impl Composer {
             // may be where this was typed, the note is a link to click there instead.
             "open" => {
                 let link =
-                    crate::link::thread(self.config.as_ref(), self.client.id(), &self.thread_id);
+                    crate::link::thread(self.config.as_deref(), self.client.id(), &self.thread_id);
                 let key = self.thread_key();
                 let tx = self.tx.clone();
                 tokio::spawn(async move {
@@ -1777,6 +1807,7 @@ async fn follow_config(client: Arc<Env>, tx: mpsc::UnboundedSender<Done>) {
         }
     };
     let providers = models::providers(&config).to_vec();
+    let config = Arc::new(config);
     if tx.send(Done::Config(config.clone())).is_err() {
         return;
     }
@@ -1788,7 +1819,7 @@ async fn follow_config(client: Arc<Env>, tx: mpsc::UnboundedSender<Done>) {
 /// each item that changes it, until the subscription stops or Reply goes.
 async fn follow(
     mut events: mpsc::Receiver<WatchEvent>,
-    mut config: Option<Value>,
+    mut config: Option<Arc<Value>>,
     tx: &mpsc::UnboundedSender<Done>,
 ) {
     loop {
@@ -1798,9 +1829,13 @@ async fn follow(
         };
         match event {
             WatchEvent::Item(item) => {
-                if matches!(apply_config(&mut config, &item), Applied::Ignored) {
+                // A change is made to a copy while Reply still reads the last config, and the
+                // last one goes once Reply takes the new.
+                let mut next = config.as_deref().cloned();
+                if matches!(apply_config(&mut next, &item), Applied::Ignored) {
                     continue;
                 }
+                config = next.map(Arc::new);
                 let Some(now) = config.clone() else { continue };
                 if tx.send(Done::Config(now)).is_err() {
                     return;
@@ -1813,17 +1848,21 @@ async fn follow(
 }
 
 impl Composer {
-    /// Reply for `thread_id`, and where its background work reports back. It asks for the
-    /// machine's config and the providers' logos straight away, and follows the config.
+    /// Reply for `thread_id`, and where its background work reports back. Unless it starts out
+    /// dozing, it asks for the machine's config and the providers' logos straight away, and
+    /// follows the config.
     pub(crate) fn new(
         client: Arc<Env>,
         thread_id: String,
+        dozing: bool,
     ) -> (Composer, mpsc::UnboundedReceiver<Done>) {
         let (tx, done) = mpsc::unbounded_channel();
-        tokio::spawn(follow_config(client.clone(), tx.clone()));
+        let config_task = (!dozing)
+            .then(|| tokio::spawn(follow_config(client.clone(), tx.clone())).abort_handle());
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-        let slash = Slash::new(client.clone());
+        let slash = Slash::new();
         let mut composer = Composer {
+            config_task,
             thread_id,
             client,
             offline: None,
@@ -1977,7 +2016,7 @@ mod tests {
         let mut out = Vec::new();
         while let Ok(done) = rx.try_recv() {
             if let Done::Config(config) = done {
-                out.push(config);
+                out.push((*config).clone());
             }
         }
         out
@@ -2034,7 +2073,7 @@ mod tests {
             .send(WatchEvent::Failed("gone".into()))
             .await
             .unwrap();
-        follow(events, Some(first), &tx).await;
+        follow(events, Some(std::sync::Arc::new(first)), &tx).await;
         let sent = configs(&mut rx);
         let with = |used: u32| json!({"providers": usage(used), "directEndpoints": []});
         assert_eq!(sent, vec![with(20), with(40), with(85)]);
@@ -2059,7 +2098,7 @@ mod tests {
             version: String::new(),
         };
         let env = t3client::env::Env::new(t3client::store::Store::new("/nonexistent"), machine);
-        let (mut reply, done) = super::Composer::new(std::sync::Arc::new(env), "t1".into());
+        let (mut reply, done) = super::Composer::new(std::sync::Arc::new(env), "t1".into(), false);
         reply.state = t3client::projection::ThreadState::from_snapshot(&json!({
             "kind": "snapshot", "snapshotSequence": 1,
             "projection": {
@@ -2221,7 +2260,7 @@ mod tests {
     #[tokio::test]
     async fn the_usage_beside_the_chip_redraws_when_it_reads_differently() {
         let mut reply = reply_on_codex();
-        reply.config = Some(codex(24));
+        reply.config = Some(std::sync::Arc::new(codex(24)));
         let drawn = reply.draw(28, true);
         assert!(!drawn.contains("Session 76% left"), "{drawn:?}");
         assert!(!reply.usage_moved());
@@ -2230,7 +2269,7 @@ mod tests {
             Some(false)
         );
         // Sizing Reply lays it out without drawing it, so the change still shows as one.
-        reply.config = Some(codex(95));
+        reply.config = Some(std::sync::Arc::new(codex(95)));
         reply.height();
         assert!(reply.usage_moved());
         assert!(reply.draw(28, false).contains("Session 5% left"));
@@ -2240,16 +2279,16 @@ mod tests {
     #[tokio::test]
     async fn a_config_that_changes_nothing_shown_draws_nothing() {
         let mut reply = reply_on_codex();
-        reply.config = Some(codex(24));
+        reply.config = Some(std::sync::Arc::new(codex(24)));
         let shown = reply.config_shown();
         // T3 checked the provider again: a new time, the same numbers.
         let mut again = codex(24);
         again["providers"][0]["usageLimits"]["checkedAt"] = json!("2026-10-31T00:05:00.000Z");
-        reply.config = Some(again);
+        reply.config = Some(std::sync::Arc::new(again));
         assert_eq!(reply.config_shown(), shown);
-        reply.config = Some(codex(30));
+        reply.config = Some(std::sync::Arc::new(codex(30)));
         assert_eq!(reply.config_shown(), shown);
-        reply.config = Some(codex(80));
+        reply.config = Some(std::sync::Arc::new(codex(80)));
         assert_ne!(reply.config_shown(), shown);
     }
 
@@ -2261,7 +2300,12 @@ mod tests {
             .send(WatchEvent::Failed("unknown method".into()))
             .await
             .unwrap();
-        follow(events, Some(json!({"providers": []})), &tx).await;
+        follow(
+            events,
+            Some(std::sync::Arc::new(json!({"providers": []}))),
+            &tx,
+        )
+        .await;
         assert!(configs(&mut rx).is_empty());
     }
 
