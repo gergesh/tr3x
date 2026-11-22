@@ -60,6 +60,7 @@ automatic updates. From a clone, `sh install.sh` builds with cargo instead.
 | Answer an approval | Click **Approve**, **Always** or **Decline**, or type `a`, `s` or `d`. |
 | Jump to what needs you | ⌃⌘I, on any machine. |
 | Settle a thread | Close its tab. **Find Thread…** (⌘⇧P) brings it back. |
+| Leave threads open | Go ahead: idle ones past the [tab budget](docs/usage.md#tabs) park, untabbed, until they need you. |
 
 ## More machines
 

@@ -3,8 +3,8 @@
 //! hundred threads left open exhaust the Mac's pseudo-terminals and load T3's server with a
 //! subscription each.
 //!
-//! The budget is off until it's set, and only ever touches threads with nothing to say. A
-//! thread that needs you, works or is pinned always has its tab. Of the rest, the most recently
+//! The budget is on by default, and only ever touches threads with nothing to say. A thread
+//! that needs you, works or is pinned always has its tab. Of the rest, the most recently
 //! active keep theirs, up to `open`, and only while they were active within `idle`. The others
 //! are parked: they stay open in T3, untouched, and Find Thread brings any of them back.
 
@@ -24,10 +24,10 @@ pub struct Budget {
 const HOUR: i64 = 60 * 60 * 1000;
 
 impl Budget {
-    /// Unset: a tab for every open thread.
+    /// Unset: the 15 most recently active idle threads, active in the last two days.
     pub const DEFAULT: Budget = Budget {
-        open: None,
-        idle: None,
+        open: Some(15),
+        idle: Some(48 * HOUR),
     };
 }
 

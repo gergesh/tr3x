@@ -47,21 +47,20 @@ finished subagent's result is in its parent thread.
 
 ## Tabs
 
-Every tab is a process, a pseudo-terminal and a connection to T3, and by default every open
-thread has one. If you leave threads open, a tab budget keeps the session to what matters: a
-thread that needs you, works or is pinned always has its tab, and of the rest, the threads with
-nothing to say, only the most recently active keep theirs. The others are parked: still open in
-T3, untouched, with no tab. **Find Thread…** (⌘⇧P) lists them and brings any one back, and it
-keeps its tab until you close it. A parked thread gets its tab back on its own once it needs you
-or works.
+Every tab is a process, a pseudo-terminal and a connection to T3, so tr3x doesn't open one for
+every thread you leave open. A thread that needs you, works or is pinned always has its tab.
+Of the rest, the threads with nothing to say, the 15 most recently active keep theirs, and only
+while they were active in the last two days. The others are parked: still open in T3, untouched,
+with no tab. **Find Thread…** (⌘⇧P) lists them and brings any one back, and it keeps its tab
+until you close it. A parked thread gets its tab back on its own once it needs you or works.
 
 | To | Run |
 |---|---|
 | See the budget | `tr3x tabs` |
-| Keep the 15 most recent idle threads | `tr3x tabs 15` |
-| Only those active in the last two days | `tr3x tabs idle 2d` (`m`, `h`, `d`, `w`), or `idle off` |
-| Both at once | `tr3x tabs 15 idle 2d` |
-| A tab for every open thread again | `tr3x tabs default` |
+| Keep up to 30 | `tr3x tabs 30` |
+| Change the idle window | `tr3x tabs idle 12h` (`m`, `h`, `d`, `w`), or `idle off` |
+| A tab for every open thread, as upstream tr3x | `tr3x tabs all` |
+| Back to 15 and two days | `tr3x tabs default` |
 
 The settings are `openTabs` and `openTabsIdle` in `~/.config/tr3x/settings.json`.
 
