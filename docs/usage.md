@@ -34,16 +34,16 @@ Every key, command and setting. New to it? Start with [getting started](../READM
 | Shortcuts | Shortcuts' **Run Rex Action** lists every **T3 Code** action, for Siri, a widget or a hotkey. Go to Thread That Needs You, New Thread and Find Thread… work from anywhere. The rest act on the thread in Rex's last window, and stop with "Go to a T3 thread first" when it isn't one. A Rex action takes no input, so to start a thread by voice or from a widget, use Shortcuts' **Run Command** on the host instead: `tr3x new --prompt "…"`, with **Ask for Input** or **Dictate Text** before it. It launches in the project you worked in last (`--project name` or `--folder path` to pick), with T3's defaults for it, and opens the tab. It runs on iPhone and iPad as well as the Mac, since the command runs on the host. |
 | Finder | **New T3 Thread Here** in a folder's Quick Actions (or Services menu) asks what to do, then starts a thread in the project that holds that folder, or makes the folder one. `tr3x install` adds it on a Mac; give it a key in System Settings → Keyboard → Keyboard Shortcuts → Services. |
 
-Subagents show under the thread they work for, as `↳ title`, while they work or need you. A
-finished subagent's result is in its parent thread.
+Subagents show under the thread they work for, as `↳ title`, only while they wait on an
+approval or an answer. A subagent that's working or finished has no tab of its own: its
+progress and its result are in its parent thread, as in T3.
 
 - A subagent's header says which thread it works for. ⌃⌘[ goes there, and ⌃⌘] goes from a thread
   to its subagent (the one that needs you, first). Each goes on the screen you pressed it on.
-- A subagent you're reading keeps its tab when it finishes, until you leave it.
+- A subagent you're reading keeps its tab once you've answered it, until you leave it.
 - Closing a thread closes its subagents' tabs. One that waits on an approval or an
   answer stays, as `↳ title · for Parent`. The same goes for a subagent of a thread that's
   settled, snoozed or archived: its request would otherwise wait, unseen.
-- Closing a subagent that's only working hides it until it needs you or finishes.
 
 ## Tabs
 

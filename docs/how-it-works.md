@@ -36,15 +36,14 @@ machine it's paired with, and draws what T3 says into one Rex session.
   thread with a plain `thread.settle`, never stopping a run. A thread that's running or waiting
   on you is only hidden until it changes. Every window going at once is the session closing,
   so nothing is settled then.
-- Subagents get a window under their parent only while they work or need you. Once one
-  finishes, its result belongs to the parent thread, which is where T3 shows it. One you're
-  looking at (the session's active window) keeps its window until you leave.
+- Subagents get a window under their parent only while they wait on an approval or an
+  answer, which nothing else shows. Their work and their results belong to the parent
+  thread, which is where T3 shows them, so a subagent that only works costs no pane. One
+  you're looking at (the session's active window) keeps its window until you leave.
 - A subagent follows its parent's window: close the parent and its subagents close too. One
   that waits on an approval or an answer, or whose parent has no window because it's settled,
   snoozed or archived, gets a window of its own with the attention threads,
-  `↳ title · for Parent`. A failed one doesn't: nothing waits on it.
-- A subagent that only works has a steady `updatedAt` as far as a closed window goes, so a
-  closed window stays closed until the subagent needs you, not until its next tool call.
+  `↳ title · for Parent`.
 - `state.json` also keeps `parents`, each shown subagent's thread to its parent's, which ⌃⌘[
   and ⌃⌘] read.
 - State lives in `~/.local/state/tr3x/state.json`: the session id, the window of each thread,

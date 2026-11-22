@@ -213,12 +213,7 @@ pub fn wanted(shells: &[MachineShell], inbox: &mut Inbox, now: i64) -> Vec<Want>
             (Some(parent), None) => (format!("↳ {title}"), Some(tag(&parent.title))),
             (None, None) => (title, None),
         };
-        // A subagent that only works has nothing to say until it changes, so closing its window
-        // hides it until it needs you or finishes, not until its next tool call.
-        let updated_at = match (child, status) {
-            (true, Some("Working" | "Goal")) => "working".to_string(),
-            _ => thread["updatedAt"].as_str().unwrap_or_default().to_string(),
-        };
+        let updated_at = thread["updatedAt"].as_str().unwrap_or_default().to_string();
         Some(Want {
             thread: ThreadRef::new(env.clone(), id),
             label: decorate(&title, m.badge, m.offline),
@@ -343,14 +338,15 @@ pub fn park(
 /// the finder unsettles or unarchives it first, and the shell says so a moment later.
 const SUMMON_GRACE_MS: i64 = 60_000;
 
-/// A subagent gets a window only while it works or needs you. Once it finishes, its result
-/// belongs to the parent thread, which is where T3 shows it.
+/// A subagent gets a window only while it waits on an approval or an answer, which nothing
+/// else shows. Its work and its result belong to the thread it works for, which is where T3
+/// shows them, so a subagent that only works costs no pane.
 fn shown_subagent(thread: &Value, now: i64) -> bool {
     thread["lineage"]["relationshipToParent"] == "subagent"
         && thread["archivedAt"].is_null()
         && matches!(
             t3client::inbox::status_label(thread, now),
-            Some("Approval" | "Input" | "Working" | "Goal" | "Failed" | "Limited")
+            Some("Approval" | "Input")
         )
 }
 
@@ -2511,13 +2507,19 @@ mod tests {
             threads: vec![
                 thread("a", json!({})),
                 thread("b", json!({})),
-                // A task delegated through T3, working: shown under a.
+                // A task delegated through T3, asking for an approval: shown under a.
                 child(
                     "task",
                     "a",
-                    json!({"creationSource": "mcp", "activeRunId": "r1", "latestRunId": "r1", "activityRunStatus": "running"}),
+                    json!({"creationSource": "mcp", "pendingRuntimeRequest": {"kind": "command"}}),
                 ),
-                // Its own subagent, working: shown under a too.
+                // Its own subagent that asks: shown under a too.
+                child(
+                    "deeper",
+                    "task",
+                    json!({"creationSource": "provider", "pendingRuntimeRequest": {"kind": "command"}}),
+                ),
+                // A subagent that only works: its progress is a's, so it costs no pane.
                 child(
                     "deep",
                     "task",
@@ -2553,9 +2555,10 @@ mod tests {
         let wants = wanted(&[machine("h", &shell, None)], &mut Inbox::default(), 0);
         let ids: Vec<&str> = wants.iter().map(|w| w.thread.thread.as_str()).collect();
         let a = ids.iter().position(|i| *i == "a").unwrap();
-        assert_eq!(&ids[a + 1..a + 3], &["task", "deep"]);
+        assert_eq!(&ids[a + 1..a + 3], &["task", "deeper"]);
         assert!(
-            !ids.contains(&"old")
+            !ids.contains(&"deep")
+                && !ids.contains(&"old")
                 && !ids.contains(&"done")
                 && !ids.contains(&"cancelled")
                 && !ids.contains(&"finished")
@@ -2609,41 +2612,6 @@ mod tests {
         assert_eq!(asks.label, "↳ Audit tests · for Refactor sync");
         assert_eq!(asks.place, Place::Attention);
         assert!(asks.parent.is_none() && asks.child && asks.needs_you);
-    }
-
-    /// A subagent that only works says nothing new until it changes, so closing its window
-    /// hides it until it needs you.
-    #[test]
-    fn a_working_subagent_stays_closed_until_it_needs_you() {
-        let working = json!({"creationSource": "mcp", "activeRunId": "r", "latestRunId": "r", "activityRunStatus": "running"});
-        let at = |updated: &str, extra: Value| {
-            let mut t = child_of("a", "task", working.clone());
-            t["updatedAt"] = json!(updated);
-            if !extra.is_null() {
-                for (k, v) in extra.as_object().unwrap() {
-                    t[k] = v.clone();
-                }
-            }
-            ShellState {
-                threads: vec![thread("a", json!({})), t],
-                ..ShellState::default()
-            }
-        };
-        let first = at("2026-11-04T10:00:00.000Z", Value::Null);
-        let later = at("2026-11-04T10:00:09.000Z", Value::Null);
-        let asks = at(
-            "2026-11-04T10:00:20.000Z",
-            json!({"pendingRuntimeRequest": {"kind": "command"}}),
-        );
-        let stamp = |shell: &ShellState| {
-            wanted(&[machine("h", shell, None)], &mut Inbox::default(), 0)
-                .into_iter()
-                .find(|w| w.thread.thread == "task")
-                .unwrap()
-                .updated_at
-        };
-        assert_eq!(stamp(&first), stamp(&later));
-        assert_ne!(stamp(&first), stamp(&asks));
     }
 
     fn sub(key: &str, label: &str, parent: &str, needs_you: bool) -> Want {
