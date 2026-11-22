@@ -13,15 +13,18 @@ machine it's paired with, and draws what T3 says into one Rex session.
   to `~/.local/state/tr3x/sync.log`.
 - `tr3x sync` follows each machine's shell subscription (`orchestration.subscribeShell`), each
   on a connection of its own that drops and resumes on its own, after the last event it had,
-  from a quarter of a second up to 10 seconds apart. After each change it reconciles the Rex
-  session: it creates, closes, relabels and reorders windows with one Lua script per change
-  through `rex do`. Blocks are created and disowned in that same connection, so they size to
+  from a quarter of a second up to 10 seconds apart. After each change it works out the windows
+  T3's state asks for, in memory. Only when that differs from what it last reconciled, when
+  Rex reports an event, or once a minute as a backstop, does it read the session from Rex and
+  reconcile: it creates, closes, relabels and reorders windows with one Lua script per change
+  through `rex do`. A working thread's progress changes nothing a window shows, so it costs
+  Rex nothing. Blocks are created and disowned in that same connection, so they size to
   whichever Rex app is looking at them.
 - The order is T3's own sidebar logic, a port of `Sidebar.logic.ts` and `threadInbox.ts`
   in `t3client`, over every machine's threads at once. A pinned thread stays put while it
   works, as in T3.
 - A window the user closes is noticed at once: each session's watcher (`rex do`) prints on Rex's
-  `window_closed` event, and sync's 5-second pass catches anything it missed. Sync settles the
+  `window_closed` event, and sync's backstop pass catches anything it missed. Sync settles the
   thread with a plain `thread.settle`, never stopping a run. A thread that's running or waiting
   on you is only hidden until it changes. Every window going at once is the session closing,
   so nothing is settled then.
