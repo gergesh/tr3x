@@ -909,7 +909,11 @@ impl Syncer {
         {
             return Ok(id.clone());
         }
-        if let Some(id) = self.taken_over(spec, &sessions).await? {
+        // Only a session this sync had and lost is looked for: a sync with no record of one, as a
+        // fresh state directory, would otherwise take over another sync's session by its label.
+        if group.session_id.is_some()
+            && let Some(id) = self.taken_over(spec, &sessions).await?
+        {
             return Ok(id);
         }
         let id = self.rex.create_session(&spec.label).await?;
@@ -956,9 +960,9 @@ impl Syncer {
             let Some(id) = candidate["session_id"].as_str() else {
                 continue;
             };
-            let Ok(view) = self.rex.inspect(id).await else {
-                continue;
-            };
+            // Not knowing what it holds isn't knowing it's free: the pass fails and tries again,
+            // rather than open a second session beside it.
+            let view = self.rex.inspect(id).await?;
             if !holds_tr3x(&view) {
                 continue;
             }
