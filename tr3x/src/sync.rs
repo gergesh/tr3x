@@ -107,6 +107,9 @@ struct Print {
     own_pane: bool,
 }
 
+/// How soon a New Tab watcher that ended is started again.
+const WATCHER_RETRY: Duration = Duration::from_secs(5);
+
 /// However quiet the shells and Rex are, sync looks at Rex this often, for anything it missed.
 const REX_BACKSTOP: Duration = Duration::from_secs(60);
 
@@ -886,8 +889,9 @@ pub struct Syncer {
     pub disk: Disk,
     /// Put the merged session, or this Mac's, first in Rex's list when it's made.
     pub first: bool,
-    /// The `rex do` scripts that turn a New Tab in each session into a new thread, by session.
-    pub watchers: HashMap<String, tokio::process::Child>,
+    /// The `rex do` scripts that turn a New Tab in each session into a new thread, by session,
+    /// with when each started.
+    pub watchers: HashMap<String, (tokio::process::Child, Instant)>,
     /// Threads whose window the user closed since the last reconcile, for `follow` to settle.
     pub closed: Vec<ThreadRef>,
     /// Conversation panes seen running tr3x, by session, so each is asked only once.
@@ -940,8 +944,11 @@ impl Syncer {
 
     /// Keeps the New Tab watcher running for `session`.
     fn watch(&mut self, session: &str, env: Option<&str>) {
-        if let Some(child) = self.watchers.get_mut(session)
-            && matches!(child.try_wait(), Ok(None))
+        if let Some((child, started)) = self.watchers.get_mut(session)
+            && (matches!(child.try_wait(), Ok(None))
+                // One that ended as it started isn't started again for a few seconds, however
+                // often sync passes: each that ends wakes sync.
+                || started.elapsed() < WATCHER_RETRY)
         {
             return;
         }
@@ -956,6 +963,7 @@ impl Syncer {
             .spawn();
         match child {
             Ok(mut child) => {
+                let started = Instant::now();
                 if let Some(mut stdin) = child.stdin.take() {
                     let script = watcher_script(&exe, env);
                     tokio::spawn(async move {
@@ -966,7 +974,6 @@ impl Syncer {
                 if let Some(stdout) = child.stdout.take() {
                     tokio::spawn(async move {
                         use tokio::io::AsyncBufReadExt;
-                        let started = tokio::time::Instant::now();
                         let mut lines = tokio::io::BufReader::new(stdout).lines();
                         while let Ok(Some(line)) = lines.next_line().await {
                             if line.trim() == "closed" {
@@ -975,13 +982,13 @@ impl Syncer {
                         }
                         // The watcher ended: Rex quit or restarted, or the session went. The
                         // next pass looks at Rex and starts it again, so a tab closed meanwhile
-                        // is read while what it should do still holds. One that ends as it starts
-                        // waits a few seconds first, so it isn't started again on every pass.
-                        tokio::time::sleep_until(started + Duration::from_secs(5)).await;
+                        // is read while what it should do still holds. Not before it may be
+                        // started again, so one that ended as it started is retried then.
+                        tokio::time::sleep_until((started + WATCHER_RETRY).into()).await;
                         CLOSED.notify_one();
                     });
                 }
-                self.watchers.insert(session.to_string(), child);
+                self.watchers.insert(session.to_string(), (child, started));
             }
             Err(e) => eprintln!("tr3x: couldn't watch for new windows: {e:#}"),
         }
