@@ -104,7 +104,12 @@ struct Print {
     wants: Vec<Want>,
     health: Vec<(String, Health)>,
     mode: Sessions,
+    /// `/reply pane` reshapes every window.
+    own_pane: bool,
 }
+
+/// How soon a New Tab watcher that ended is started again.
+const WATCHER_RETRY: Duration = Duration::from_secs(5);
 
 /// However quiet the shells and Rex are, sync looks at Rex this often, for anything it missed.
 const REX_BACKSTOP: Duration = Duration::from_secs(60);
@@ -147,6 +152,13 @@ pub struct MachineShell<'a> {
     pub caps: Capabilities,
     /// Out of reach for a while: its windows say so.
     pub offline: bool,
+}
+
+/// A thread row as sync keeps it: only what's read, tagged with its machine, which the inbox
+/// keys its return stamps by so the same id on two machines stays two threads.
+fn take_in(row: &mut Value, env: &str) {
+    compact_row(row);
+    row["tr3xEnv"] = json!(env);
 }
 
 /// The windows the machines' shells ask for at `now`: T3's sidebar order over every machine's
@@ -927,8 +939,9 @@ pub struct Syncer {
     pub disk: Disk,
     /// Put the merged session, or this Mac's, first in Rex's list when it's made.
     pub first: bool,
-    /// The `rex do` scripts that turn a New Tab in each session into a new thread, by session.
-    pub watchers: HashMap<String, tokio::process::Child>,
+    /// The `rex do` scripts that turn a New Tab in each session into a new thread, by session,
+    /// with when each started.
+    pub watchers: HashMap<String, (tokio::process::Child, Instant)>,
     /// Threads whose window the user closed since the last reconcile, for `follow` to settle.
     pub closed: Vec<ThreadRef>,
     /// Conversation panes seen running tr3x, by session, so each is asked only once.
@@ -983,8 +996,11 @@ impl Syncer {
 
     /// Keeps the New Tab watcher running for `session`.
     fn watch(&mut self, session: &str, env: Option<&str>) {
-        if let Some(child) = self.watchers.get_mut(session)
-            && matches!(child.try_wait(), Ok(None))
+        if let Some((child, started)) = self.watchers.get_mut(session)
+            && (matches!(child.try_wait(), Ok(None))
+                // One that ended as it started isn't started again for a few seconds, however
+                // often sync passes: each that ends wakes sync.
+                || started.elapsed() < WATCHER_RETRY)
         {
             return;
         }
@@ -999,6 +1015,7 @@ impl Syncer {
             .spawn();
         match child {
             Ok(mut child) => {
+                let started = Instant::now();
                 if let Some(mut stdin) = child.stdin.take() {
                     let script = watcher_script(&exe, env);
                     tokio::spawn(async move {
@@ -1023,9 +1040,15 @@ impl Syncer {
                                 ACTIVE_CHANGED.notify_one();
                             }
                         }
+                        // The watcher ended: Rex quit or restarted, or the session went. The
+                        // next pass looks at Rex and starts it again, so a tab closed meanwhile
+                        // is read while what it should do still holds. Not before it may be
+                        // started again, so one that ended as it started is retried then.
+                        tokio::time::sleep_until((started + WATCHER_RETRY).into()).await;
+                        CLOSED.notify_one();
                     });
                 }
-                self.watchers.insert(session.to_string(), child);
+                self.watchers.insert(session.to_string(), (child, started));
             }
             Err(e) => eprintln!("tr3x: couldn't watch for new windows: {e:#}"),
         }
@@ -1491,14 +1514,16 @@ async fn follow(
                     // takes in keeps only what's read.
                     match item["kind"].as_str() {
                         Some("snapshot") => {
-                            track.shell.threads.iter_mut().for_each(compact_row);
+                            for row in &mut track.shell.threads {
+                                take_in(row, &env);
+                            }
                         }
                         Some("thread.updated") => {
                             let id = &item["thread"]["id"];
                             if let Some(row) =
                                 track.shell.threads.iter_mut().find(|t| t["id"] == *id)
                             {
-                                compact_row(row);
+                                take_in(row, &env);
                             }
                         }
                         _ => {}
@@ -1681,6 +1706,7 @@ async fn follow(
             wants: wants.iter().map(|w| w.print(&syncer.state)).collect(),
             health: envs.iter().map(|e| (e.clone(), health(e))).collect(),
             mode,
+            own_pane: crate::reply::own_pane(),
         };
         if !rex_due && last_print.as_ref() == Some(&print) && last_rex.elapsed() < REX_BACKSTOP {
             last = wants;
@@ -1850,6 +1876,14 @@ fn name_of(hub: &Hub, env: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_row_taken_in_keeps_its_machine() {
+        let mut row = json!({"id": "t", "title": "x", "branch": null});
+        take_in(&mut row, "studio");
+        assert_eq!(row["tr3xEnv"], "studio");
+        assert_eq!(row["id"], "t");
+    }
+
     use super::*;
 
     /// Pairing a machine while sync runs reloads the registry. The machines already followed
