@@ -121,6 +121,13 @@ pub struct MachineShell<'a> {
     pub offline: bool,
 }
 
+/// A thread row as sync keeps it: only what's read, tagged with its machine, which the inbox
+/// keys its return stamps by so the same id on two machines stays two threads.
+fn take_in(row: &mut Value, env: &str) {
+    compact_row(row);
+    row["tr3xEnv"] = json!(env);
+}
+
 /// The windows the machines' shells ask for at `now`: T3's sidebar order over every machine's
 /// threads, with each subagent thread worth showing right after the window of the thread it
 /// works for.
@@ -1411,14 +1418,16 @@ async fn follow(
                     // takes in keeps only what's read.
                     match item["kind"].as_str() {
                         Some("snapshot") => {
-                            track.shell.threads.iter_mut().for_each(compact_row);
+                            for row in &mut track.shell.threads {
+                                take_in(row, &env);
+                            }
                         }
                         Some("thread.updated") => {
                             let id = &item["thread"]["id"];
                             if let Some(row) =
                                 track.shell.threads.iter_mut().find(|t| t["id"] == *id)
                             {
-                                compact_row(row);
+                                take_in(row, &env);
                             }
                         }
                         _ => {}
@@ -1738,6 +1747,14 @@ fn name_of(hub: &Hub, env: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_row_taken_in_keeps_its_machine() {
+        let mut row = json!({"id": "t", "title": "x", "branch": null});
+        take_in(&mut row, "studio");
+        assert_eq!(row["tr3xEnv"], "studio");
+        assert_eq!(row["id"], "t");
+    }
+
     use super::*;
 
     /// Pairing a machine while sync runs reloads the registry. The machines already followed
