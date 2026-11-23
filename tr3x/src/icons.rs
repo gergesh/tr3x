@@ -403,6 +403,11 @@ pub fn note_binary() {
     STARTED_ON.get_or_init(|| identity(&real_exe()));
 }
 
+/// The binary at the path this process started from, as it is now.
+pub fn binary() -> Option<(u64, u64)> {
+    identity(&real_exe())
+}
+
 /// Whether the binary at the path this process started from is no longer the one it runs.
 pub fn replaced() -> bool {
     match (STARTED_ON.get().copied().flatten(), identity(&real_exe())) {

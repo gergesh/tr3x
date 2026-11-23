@@ -1336,10 +1336,21 @@ pub async fn run(first: bool, log: bool) -> Result<()> {
     }
     // Once a day: tr3x's and each machine's T3's updates. On `auto`, tr3x installs its own.
     tokio::spawn(crate::update::follow());
+    // The panes join here rather than each following the shell from T3. Served once, for as
+    // long as sync runs: following T3 again after an error keeps the panes that joined.
+    let (panes, mut heard) = match Panes::serve() {
+        Ok(served) => served,
+        Err(e) => {
+            eprintln!("tr3x: panes can't join sync, so each follows T3 itself: {e}");
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            std::mem::forget(tx);
+            (Panes::default(), rx)
+        }
+    };
     let mut pause = 2;
     loop {
         let started = Instant::now();
-        let Err(error) = follow(first, &mut wake).await;
+        let Err(error) = follow(first, &mut wake, &panes, &mut heard).await;
         if started.elapsed() > Duration::from_secs(120) {
             pause = 2;
         }
@@ -1404,6 +1415,8 @@ fn follow_machines(
 async fn follow(
     first: bool,
     wake: &mut tokio::signal::unix::Signal,
+    panes: &Panes,
+    heard: &mut tokio::sync::mpsc::UnboundedReceiver<Heard>,
 ) -> Result<std::convert::Infallible> {
     let mut hub = t3::hub();
     // A Mac without T3 of its own can still follow the machines it's paired with.
@@ -1458,16 +1471,8 @@ async fn follow(
     let mut tick = tokio::time::interval(Duration::from_secs(5));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut next_reconcile = tokio::time::Instant::now();
-    // The panes join here rather than each following the shell from T3.
-    let (panes, mut heard) = match Panes::serve() {
-        Ok(served) => served,
-        Err(e) => {
-            eprintln!("tr3x: panes can't join sync, so each follows T3 itself: {e}");
-            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-            std::mem::forget(tx);
-            (Panes::default(), rx)
-        }
-    };
+    // An update replaced the binary, which the panes on sync hear rather than look for.
+    let mut binary = crate::icons::binary();
     // Whether the next pass has to look at Rex whatever the shells say, what the last pass that
     // did saw, and when.
     let mut rex_due = true;
@@ -1544,6 +1549,11 @@ async fn follow(
                     settings_stamps = stamps;
                     panes.tell(None, &Note::Settings);
                 }
+                let now = crate::icons::binary();
+                if now != binary {
+                    binary = now;
+                    panes.tell(None, &Note::Check);
+                }
             }
             _ = wake.recv() => {
                 dirty = true;
@@ -1615,7 +1625,7 @@ async fn follow(
             }
         }
         // Whether each pane is on screen, and its slice once its machine has caught up.
-        publish(&panes, &tracks, &syncer);
+        publish(panes, &tracks, &syncer);
         // Nothing more to say until some machine has caught up once.
         if !tracks.values().any(|t| t.synced.is_some()) {
             continue;

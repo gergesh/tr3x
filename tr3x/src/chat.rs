@@ -1926,6 +1926,23 @@ async fn event_loop(
                 // A content event may have left the composer waiting for the next frame.
                 let pending = reply;
                 reply = true;
+                // Typed into or focused, the pane is on screen whatever sync last said: a
+                // visibility sync missed mustn't leave a frozen tab under the user's hands. It
+                // stays awake until sync next says it's hidden.
+                if matches!(event, Some(Ok(Event::FocusGained | Event::Key(_) | Event::Mouse(_) | Event::Paste(_))))
+                    && (dozing || !visible)
+                {
+                    visible = true;
+                    hidden_at = None;
+                    deciding = None;
+                    if dozing {
+                        wake(&mut dozing, &mut thread_events, &mut composer, client, thread_id);
+                        if sync_notes.is_none() && role != Role::Reply {
+                            shell_events = Some(client.watch_shell(None));
+                        }
+                    }
+                    dirty = true;
+                }
                 match event {
                     Some(Ok(Event::Resize(cols, rows))) => {
                         resize = Some((cols as usize, rows as usize));
