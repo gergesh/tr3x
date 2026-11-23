@@ -716,12 +716,14 @@ fn holds_tr3x(view: &Value) -> bool {
 
 /// Makes `session`, a copy of the group's session, the group's. The old windows went with the
 /// old session, so none of them was closed by you: the group starts from no windows, and the
-/// copy's are adopted by their tags. Threads you closed stay closed.
+/// copy's are adopted by their tags. Threads you closed stay closed, and ones Find Thread
+/// brought back keep their tab.
 fn take_over(group: &mut Group, session: &str) {
     *group = Group {
         session_id: Some(session.to_string()),
         windows: Default::default(),
         dismissed: std::mem::take(&mut group.dismissed),
+        summoned: std::mem::take(&mut group.summoned),
     };
 }
 
