@@ -120,6 +120,10 @@ struct Print {
 /// How soon a New Tab watcher that ended is started again.
 const WATCHER_RETRY: Duration = Duration::from_secs(5);
 
+/// How long after sync starts its panes may take to join it again, past their longest wait
+/// between tries. Until then, sync can't know which of them hold something.
+const PANES_REJOIN: Duration = Duration::from_secs(35);
+
 /// However quiet the shells and Rex are, sync looks at Rex this often, for anything it missed.
 const REX_BACKSTOP: Duration = Duration::from_secs(60);
 
@@ -1576,6 +1580,7 @@ async fn follow(
     // Whether the next pass has to look at Rex whatever the shells say, what the last pass that
     // did saw, and when.
     let mut rex_due = true;
+    let rejoining_until = Instant::now() + PANES_REJOIN;
     let mut last_print: Option<Print> = None;
     let mut last_rex = Instant::now();
     let mut settings_stamps = crate::width::stamps();
@@ -1784,11 +1789,21 @@ async fn follow(
             summoned.extend(group.summoned.keys().cloned());
         }
         let holding = panes.holding();
+        // While panes are still joining, a tab that's there may hold a draft its pane hasn't
+        // said yet: it stays. Threads with no tab are parked as usual, so none is made.
+        let rejoining = Instant::now() < rejoining_until;
+        let has_tab = |key: &str| {
+            syncer
+                .state
+                .groups
+                .values()
+                .any(|g| g.windows.contains_key(key))
+        };
         let parked = park(
             &mut wants,
             crate::tabs::budget(),
             &|key| summoned.contains(key),
-            &|key| holding.contains(key),
+            &|key| holding.contains(key) || (rejoining && has_tab(key)),
             now_ms,
         );
         let envs: Vec<String> = hub.envs().iter().map(|e| e.id().to_string()).collect();
