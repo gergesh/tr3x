@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Reply shows T3's prompt suggestion: after a turn finishes, the empty input shows a dimmed guess at your next message, as in T3. Tab takes it into the input, Esc puts it away. It needs T3 0.1.12 or later with prompt suggestions on in T3's settings.
+- Rex restarting no longer leaves two **T3 Code** sessions when a session-restore tool such as rexurrect runs. rexurrect replaces the sessions Rex carries over with copies that have new ids, and closes the originals; sync took its session for gone and opened another beside the copy, whose tabs were bare shells. Sync now takes over a session with its label that holds its tabs, and starts their conversations again in place.
+
 ## 0.1.6
 
 - Works with Rex, not only Rex Beta. Once Rex replaced Rex Beta, sync couldn't reach Rex, so `/settle`, `/snooze` and `/archive` left the thread's tab open, and new threads got no tab. A running sync now finds Rex again without a restart.
