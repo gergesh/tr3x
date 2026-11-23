@@ -55,7 +55,7 @@ pub fn budget() -> Budget {
     budget
 }
 
-/// `90m`, `36h`, `3d` or `2w`, in milliseconds.
+/// `90m`, `36h`, `3d` or `2w`, in milliseconds. None for one too long to count.
 fn duration_ms(text: &str) -> Option<i64> {
     let text = text.trim();
     let split = text.find(|c: char| !c.is_ascii_digit())?;
@@ -68,7 +68,7 @@ fn duration_ms(text: &str) -> Option<i64> {
         "w" | "week" | "weeks" => 7 * 24 * HOUR,
         _ => return None,
     };
-    (n > 0).then(|| n * unit)
+    n.checked_mul(unit).filter(|_| n > 0)
 }
 
 fn say_duration(ms: i64) -> String {
@@ -147,6 +147,8 @@ mod tests {
         assert_eq!(duration_ms("0h"), None);
         assert_eq!(duration_ms("3"), None);
         assert_eq!(duration_ms("soon"), None);
+        assert_eq!(duration_ms("9223372036854775807w"), None);
+        assert!(apply(&["idle".into(), "99999999999999999w".into()]).is_err());
     }
 
     #[test]

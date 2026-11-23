@@ -22,7 +22,9 @@ machine it's paired with, and draws what T3 says into one Rex session.
   whichever Rex app is looking at them.
 - The tab budget (`tabs.rs`, `park` in `sync.rs`) parks the idle open threads past its count,
   least recently active first, and the ones not active within its idle window. Activity is the
-  latest of a thread's creation, reopening, latest run and last message. A parked thread's
+  latest of a thread's creation, reopening, latest run and last message. A thread that works
+  or needs you counts toward the count where its activity ranks it, so a run starting doesn't
+  unpark another thread only to park it when the run ends. A parked thread's
   window closes without settling it or counting as closed, and none is made for it, except the
   one on screen, which stays until you leave it. Find Thread's restore marks a thread
   `summoned` in `state.json`, which the budget skips until its window closes, or a minute
