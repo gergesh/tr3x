@@ -36,6 +36,11 @@ machine it's paired with, and draws what T3 says into one Rex session.
   closed window stays closed until the subagent needs you, not until its next tool call.
 - `state.json` also keeps `parents`, each shown subagent's thread to its parent's, which ⌃⌘[
   and ⌃⌘] read.
+- A session that's gone may only have a new id: a restore tool such as rexurrect replaces the
+  sessions Rex carries over at its start with copies, and closes the originals. Before making a
+  new session, sync takes over one with the same label whose windows carry its tags and that no
+  other group has. It starts from none of the old windows, so nothing is settled, adopts the
+  copy's by their tags, and restarts the panes that came back as shells.
 - State lives in `~/.local/state/tr3x/state.json`: the session id, the window of each thread,
   keyed `<environment>/<thread>`, and threads hidden by a closed window. tr3x never touches a
   session or window it didn't make. A state file from before machines moves to this Mac's
