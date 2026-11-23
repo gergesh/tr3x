@@ -966,6 +966,7 @@ impl Syncer {
                 if let Some(stdout) = child.stdout.take() {
                     tokio::spawn(async move {
                         use tokio::io::AsyncBufReadExt;
+                        let started = tokio::time::Instant::now();
                         let mut lines = tokio::io::BufReader::new(stdout).lines();
                         while let Ok(Some(line)) = lines.next_line().await {
                             if line.trim() == "closed" {
@@ -974,7 +975,9 @@ impl Syncer {
                         }
                         // The watcher ended: Rex quit or restarted, or the session went. The
                         // next pass looks at Rex and starts it again, so a tab closed meanwhile
-                        // is read while what it should do still holds.
+                        // is read while what it should do still holds. One that ends as it starts
+                        // waits a few seconds first, so it isn't started again on every pass.
+                        tokio::time::sleep_until(started + Duration::from_secs(5)).await;
                         CLOSED.notify_one();
                     });
                 }
