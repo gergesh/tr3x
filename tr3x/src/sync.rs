@@ -631,6 +631,25 @@ fn tagged(windows: &[Value]) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Whether a session, as `session inspect --json` prints it, has a window tr3x made: one with
+/// a tagged conversation pane.
+fn holds_tr3x(view: &Value) -> bool {
+    view["windows"]
+        .as_array()
+        .is_some_and(|windows| !tagged(windows).is_empty())
+}
+
+/// Makes `session`, a copy of the group's session, the group's. The old windows went with the
+/// old session, so none of them was closed by you: the group starts from no windows, and the
+/// copy's are adopted by their tags. Threads you closed stay closed.
+fn take_over(group: &mut Group, session: &str) {
+    *group = Group {
+        session_id: Some(session.to_string()),
+        windows: Default::default(),
+        dismissed: std::mem::take(&mut group.dismissed),
+    };
+}
+
 /// Whether a pane's `process` answer has tr3x running in it, by the program's file name
 /// against `exe`'s, or `None` when it doesn't say. Rex can bring a session back after a
 /// restart with a shell where the conversation was, under the same label.
@@ -978,8 +997,16 @@ impl Syncer {
         {
             return Ok(id.clone());
         }
+        // Only a session this sync had and lost is looked for: a sync with no record of one, as a
+        // fresh state directory, would otherwise take over another sync's session by its label.
+        if group.session_id.is_some()
+            && let Some(id) = self.taken_over(spec, &sessions).await?
+        {
+            return Ok(id);
+        }
         let id = self.rex.create_session(&spec.label).await?;
         // Recorded before anything else can fail, so a retry never makes a second session.
+        let group = self.state.groups.entry(spec.key.clone()).or_default();
         *group = Group {
             session_id: Some(id.clone()),
             ..Group::default()
@@ -992,6 +1019,47 @@ impl Syncer {
             eprintln!("tr3x: couldn't move the session first: {e:#}");
         }
         Ok(id)
+    }
+
+    /// A session with the group's label that holds tr3x's windows, which no other group has,
+    /// made the group's own.
+    async fn taken_over(
+        &mut self,
+        spec: &SessionSpec,
+        sessions: &[Value],
+    ) -> Result<Option<String>> {
+        // Gone, but maybe only renamed: a session tool such as rexurrect replaces the sessions
+        // Rex carries over at its start with copies that have new ids, and closes the originals.
+        // A copy keeps the windows' tagged panes, so take it over rather than open a second
+        // session beside it. Its shell panes become conversations again as the pass goes on.
+        let owned: HashSet<String> = self
+            .state
+            .groups
+            .iter()
+            .filter(|(key, _)| **key != spec.key)
+            .filter_map(|(_, g)| g.session_id.clone())
+            .collect();
+        for candidate in sessions.iter().filter(|s| {
+            s["label"].as_str() == Some(spec.label.as_str())
+                && s["session_id"]
+                    .as_str()
+                    .is_some_and(|id| !owned.contains(id))
+        }) {
+            let Some(id) = candidate["session_id"].as_str() else {
+                continue;
+            };
+            // Not knowing what it holds isn't knowing it's free: the pass fails and tries again,
+            // rather than open a second session beside it.
+            let view = self.rex.inspect(id).await?;
+            if !holds_tr3x(&view) {
+                continue;
+            }
+            eprintln!("tr3x: taking over {id}, a copy of the session made after Rex restarted");
+            take_over(self.state.groups.entry(spec.key.clone()).or_default(), id);
+            self.persist()?;
+            return Ok(Some(id.to_string()));
+        }
+        Ok(None)
     }
 
     /// Keeps the New Tab watcher running for `session`.
@@ -2158,6 +2226,49 @@ mod tests {
             {"block_id": "b1", "label": format!("t3:{tag}")},
             {"block_id": "b2", "label": "Reply"}
         ]}]})
+    }
+
+    /// After a Rex restart, rexurrect closes the session Rex carried over and opens a copy with
+    /// new ids. Taking the copy over keeps every thread's tab, opens no second one, settles
+    /// nothing, and keeps a thread you closed closed.
+    #[test]
+    fn a_copy_of_the_session_is_taken_over_whole() {
+        let mut group = Group {
+            session_id: Some("s-old".into()),
+            ..Group::default()
+        };
+        group.windows.insert("home-env/a".into(), win("w-a", "A"));
+        group.windows.insert("home-env/b".into(), win("w-b", "B"));
+        group.dismissed.insert("home-env/c".into(), "u1".into());
+        let copy = json!({"session_id": "s-new", "windows": [
+            tagged_window("n-a", "home-env/a"),
+            tagged_window("n-b", "home-env/b"),
+        ]});
+        assert!(holds_tr3x(&copy));
+        assert!(!holds_tr3x(&json!({"session_id": "s", "windows": [
+            {"window_id": "w", "layers": [{"blocks": [{"block_id": "b", "label": "zsh"}]}]}
+        ]})));
+        assert!(!holds_tr3x(&json!({"session_id": "s"})));
+
+        take_over(&mut group, "s-new");
+        assert_eq!(group.session_id.as_deref(), Some("s-new"));
+        let windows = copy["windows"].as_array().unwrap();
+        let wants = [
+            want("home-env/a", "A"),
+            want("home-env/b", "B"),
+            want("home-env/c", "C"),
+        ];
+        let known: HashSet<String> = wants.iter().map(Want::key).collect();
+        let envs = vec!["home-env".to_string()];
+        assert!(adopt(windows, &mut group, &known, &envs, "home-env").is_empty());
+        let present = vec![("n-a".into(), "A".into()), ("n-b".into(), "B".into())];
+        let plan = plan(&wants, &present, None, &mut group, &ready);
+        assert!(plan.settle.is_empty());
+        assert!(plan.create.is_empty());
+        assert!(plan.close.is_empty());
+        assert_eq!(group.windows["home-env/a"].window_id, "n-a");
+        assert_eq!(group.windows["home-env/b"].window_id, "n-b");
+        assert!(group.dismissed.contains_key("home-env/c"));
     }
 
     #[test]
