@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use t3client::env::{Env, WatchEvent};
 use t3client::hub::{Forwarder, Hub, ThreadRef};
 use t3client::inbox::{Capabilities, Inbox, Place};
-use t3client::projection::ShellState;
+use t3client::projection::{ShellState, compact_row};
 
 use crate::machines::Sessions;
 use crate::rex::{Rex, lua_str};
@@ -126,11 +126,21 @@ pub struct MachineShell<'a> {
     pub offline: bool,
 }
 
+/// A thread row as sync keeps it: only what's read, tagged with its machine, which the inbox
+/// keys its return stamps by so the same id on two machines stays two threads.
+fn take_in(row: &mut Value, env: &str) {
+    compact_row(row);
+    row["tr3xEnv"] = json!(env);
+}
+
 /// The windows the machines' shells ask for at `now`: T3's sidebar order over every machine's
 /// threads, with each subagent thread worth showing right after the window of the thread it
 /// works for.
 pub fn wanted(shells: &[MachineShell], inbox: &mut Inbox, now: i64) -> Vec<Want> {
-    let mut threads = Vec::new();
+    // Every machine's threads in one list, as references: the shells are large, and this runs
+    // after every change. Which machine each is on goes by where the row lives.
+    let mut threads: Vec<&Value> = Vec::new();
+    let mut machine_of: HashMap<*const Value, &str> = HashMap::new();
     let mut roots: HashMap<(&str, &str), &str> = HashMap::new();
     let mut caps = Capabilities::default();
     let mut by_env: HashMap<&str, &MachineShell> = HashMap::new();
@@ -144,12 +154,17 @@ pub fn wanted(shells: &[MachineShell], inbox: &mut Inbox, now: i64) -> Vec<Want>
             }
         }
         for t in &m.shell.threads {
-            let mut t = t.clone();
-            t["tr3xEnv"] = json!(m.env);
+            machine_of.insert(t as *const Value, m.env);
             threads.push(t);
         }
     }
-    let env_of = |t: &Value| t["tr3xEnv"].as_str().unwrap_or_default().to_string();
+    let env_of = |t: &Value| {
+        machine_of
+            .get(&(t as *const Value))
+            .copied()
+            .unwrap_or_default()
+            .to_string()
+    };
     // `under`: the thread a subagent works for, when it shows beneath it. `alone`: the subagent
     // shows by itself, since that thread has no window.
     let want = |thread: &Value, place: Place, under: Option<Parent>, alone: Option<&str>| {
@@ -203,11 +218,11 @@ pub fn wanted(shells: &[MachineShell], inbox: &mut Inbox, now: i64) -> Vec<Want>
     };
     let by_id: HashMap<(String, &str), &Value> = threads
         .iter()
-        .filter_map(|t| Some(((env_of(t), t["id"].as_str()?), t)))
+        .filter_map(|&t| Some(((env_of(t), t["id"].as_str()?), t)))
         .collect();
     // Each shown subagent under the nearest ancestor that isn't one, on its own machine.
     let mut children: HashMap<(String, String), Vec<&Value>> = HashMap::new();
-    for thread in threads.iter().filter(|t| shown_subagent(t, now)) {
+    for &thread in threads.iter().filter(|t| shown_subagent(t, now)) {
         let env = env_of(thread);
         if let Some(root) = top_ancestor(thread, &env, &by_id) {
             children.entry((env, root)).or_default().push(thread);
@@ -1483,6 +1498,24 @@ async fn follow(
             match event {
                 WatchEvent::Item(item) => {
                     track.shell.apply(&item);
+                    // Sync keeps every thread T3 lists for as long as it runs: each row it
+                    // takes in keeps only what's read.
+                    match item["kind"].as_str() {
+                        Some("snapshot") => {
+                            for row in &mut track.shell.threads {
+                                take_in(row, &env);
+                            }
+                        }
+                        Some("thread.updated") => {
+                            let id = &item["thread"]["id"];
+                            if let Some(row) =
+                                track.shell.threads.iter_mut().find(|t| t["id"] == *id)
+                            {
+                                take_in(row, &env);
+                            }
+                        }
+                        _ => {}
+                    }
                     if item["kind"] == "synchronized" {
                         if track.synced != Some(track.generation) && !track.reason.is_empty() {
                             eprintln!("tr3x: {} is back", name_of(&hub, &env));
@@ -1610,16 +1643,6 @@ async fn follow(
             })
             .collect();
         let wants = wanted(&shells, &mut inbox, t3::now_ms());
-        let known: HashSet<String> = wants
-            .iter()
-            .map(Want::key)
-            .chain(shells.iter().flat_map(|m| {
-                m.shell
-                    .threads
-                    .iter()
-                    .filter_map(|t| Some(format!("{}/{}", m.env, t["id"].as_str()?)))
-            }))
-            .collect();
         let envs: Vec<String> = hub.envs().iter().map(|e| e.id().to_string()).collect();
         let health = |env: &str| match tracks.get(env) {
             Some(track) => {
@@ -1647,6 +1670,18 @@ async fn follow(
         }
         rex_due = false;
         last_rex = Instant::now();
+        // Every thread the shells list, for telling tr3x's windows from others: only a pass that
+        // reconciles reads it.
+        let known: HashSet<String> = wants
+            .iter()
+            .map(Want::key)
+            .chain(shells.iter().flat_map(|m| {
+                m.shell
+                    .threads
+                    .iter()
+                    .filter_map(|t| Some(format!("{}/{}", m.env, t["id"].as_str()?)))
+            }))
+            .collect();
 
         // The sessions the setting asks for, and the threads each holds.
         let mut specs: Vec<(SessionSpec, Vec<Want>)> = Vec::new();
@@ -1797,6 +1832,14 @@ fn name_of(hub: &Hub, env: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_row_taken_in_keeps_its_machine() {
+        let mut row = json!({"id": "t", "title": "x", "branch": null});
+        take_in(&mut row, "studio");
+        assert_eq!(row["tr3xEnv"], "studio");
+        assert_eq!(row["id"], "t");
+    }
+
     use super::*;
 
     /// Pairing a machine while sync runs reloads the registry. The machines already followed
