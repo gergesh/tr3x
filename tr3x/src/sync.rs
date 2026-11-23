@@ -103,6 +103,8 @@ struct Print {
     wants: Vec<Want>,
     health: Vec<(String, Health)>,
     mode: Sessions,
+    /// `/reply pane` reshapes every window.
+    own_pane: bool,
 }
 
 /// However quiet the shells and Rex are, sync looks at Rex this often, for anything it missed.
@@ -970,6 +972,10 @@ impl Syncer {
                                 CLOSED.notify_one();
                             }
                         }
+                        // The watcher ended: Rex quit or restarted, or the session went. The
+                        // next pass looks at Rex and starts it again, so a tab closed meanwhile
+                        // is read while what it should do still holds.
+                        CLOSED.notify_one();
                     });
                 }
                 self.watchers.insert(session.to_string(), child);
@@ -1555,6 +1561,7 @@ async fn follow(
             wants: wants.iter().map(|w| w.print(&syncer.state)).collect(),
             health: envs.iter().map(|e| (e.clone(), health(e))).collect(),
             mode,
+            own_pane: crate::reply::own_pane(),
         };
         if !rex_due && last_print.as_ref() == Some(&print) && last_rex.elapsed() < REX_BACKSTOP {
             last = wants;
