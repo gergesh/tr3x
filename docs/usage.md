@@ -58,7 +58,7 @@ or works.
 | To | Run |
 |---|---|
 | See the budget | `tr3x tabs` |
-| Keep the 15 most recent idle threads | `tr3x tabs 15` |
+| Tabs for the 15 most recently active threads (busy ones always keep theirs) | `tr3x tabs 15` |
 | Only those active in the last two days | `tr3x tabs idle 2d` (`m`, `h`, `d`, `w`), or `idle off` |
 | Both at once | `tr3x tabs 15 idle 2d` |
 | A tab for every open thread again | `tr3x tabs default` |
