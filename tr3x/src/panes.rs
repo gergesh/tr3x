@@ -195,9 +195,47 @@ pub enum Heard {
     Draft(String),
 }
 
+/// What's still to go to a pane. A pane that stops reading costs sync one slice, not every
+/// slice since: a new slice or visibility replaces the one not sent yet, and a note already
+/// waiting isn't added again.
+#[derive(Default)]
+struct Outbox {
+    shell: Option<String>,
+    visible: Option<String>,
+    notes: Vec<String>,
+}
+
+impl Outbox {
+    fn note(&mut self, line: &str) {
+        if !self.notes.iter().any(|l| l == line) {
+            self.notes.push(line.to_string());
+        }
+    }
+
+    fn take(&mut self) -> Vec<String> {
+        let mut lines: Vec<String> = self.shell.take().into_iter().collect();
+        lines.extend(self.visible.take());
+        lines.append(&mut self.notes);
+        lines
+    }
+}
+
+#[derive(Default)]
+struct Out {
+    lines: Mutex<Outbox>,
+    ready: tokio::sync::Notify,
+}
+
+impl Out {
+    fn put(&self, put: impl FnOnce(&mut Outbox)) {
+        put(&mut self.lines.lock().unwrap());
+        self.ready.notify_one();
+    }
+}
+
 struct Pane {
     key: String,
-    tx: mpsc::UnboundedSender<String>,
+    out: Arc<Out>,
     /// The last slice and visibility sent, so each goes again only when it changes.
     shell: Option<String>,
     visible: Option<Option<bool>>,
@@ -268,7 +306,7 @@ impl Panes {
         let Some(key) = hello["watch"].as_str() else {
             return;
         };
-        let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+        let out = Arc::new(Out::default());
         let id = {
             let mut inner = self.inner.lock().unwrap();
             inner.next += 1;
@@ -277,7 +315,7 @@ impl Panes {
                 id,
                 Pane {
                     key: key.to_string(),
-                    tx,
+                    out: out.clone(),
                     shell: None,
                     visible: None,
                 },
@@ -286,9 +324,13 @@ impl Panes {
         };
         let _ = heard.send(Heard::Joined);
         let writing = async {
-            while let Some(line) = rx.recv().await {
-                if write.write_all(line.as_bytes()).await.is_err() {
-                    return;
+            loop {
+                out.ready.notified().await;
+                let lines = out.lines.lock().unwrap().take();
+                for line in lines {
+                    if write.write_all(line.as_bytes()).await.is_err() {
+                        return;
+                    }
                 }
             }
         };
@@ -320,13 +362,13 @@ impl Panes {
             if let Some(line) = &line
                 && pane.shell.as_ref() != Some(line)
             {
-                let _ = pane.tx.send(line.clone());
+                pane.out.put(|o| o.shell = Some(line.clone()));
                 pane.shell = Some(line.clone());
             }
             if let Some(on) = visible
                 && pane.visible != Some(on)
             {
-                let _ = pane.tx.send(Note::Visible(on).line());
+                pane.out.put(|o| o.visible = Some(Note::Visible(on).line()));
                 pane.visible = Some(on);
             }
         }
@@ -341,7 +383,7 @@ impl Panes {
             .values()
             .filter(|p| key.is_none_or(|k| p.key == k))
         {
-            let _ = pane.tx.send(line.clone());
+            pane.out.put(|o| o.note(&line));
         }
     }
 }
@@ -424,5 +466,20 @@ mod tests {
             .unwrap();
         assert_eq!(heard.recv().await, Some(Heard::Draft("e/a".into())));
         drop(panes);
+    }
+
+    /// A pane that isn't reading is owed only the latest of each: one slice, one visibility,
+    /// each note once.
+    #[test]
+    fn a_pane_that_stops_reading_is_owed_only_the_latest() {
+        let out = Out::default();
+        for n in 0..100 {
+            out.put(|o| o.shell = Some(format!("shell {n}")));
+            out.put(|o| o.visible = Some(format!("visible {n}")));
+            out.put(|o| o.note("draft"));
+        }
+        let lines = out.lines.lock().unwrap().take();
+        assert_eq!(lines, vec!["shell 99", "visible 99", "draft"]);
+        assert!(out.lines.lock().unwrap().take().is_empty());
     }
 }
