@@ -28,7 +28,9 @@ machine it's paired with, and draws what T3 says into one Rex session.
   window closes without settling it or counting as closed, and none is made for it, except the
   one on screen, which stays until you leave it. Find Thread's restore marks a thread
   `summoned` in `state.json`, which the budget skips until its window closes, or a minute
-  passes without T3 listing it.
+  passes without T3 listing it. A pane holding text typed in Reply or a forwarded port tells
+  sync over `panes.sock`, and its thread is never parked, as closing the tab would lose them.
+  Nor is a thread with a subagent shown under it; both keep their place in the count.
 - The order is T3's own sidebar logic, a port of `Sidebar.logic.ts` and `threadInbox.ts`
   in `t3client`, over every machine's threads at once. A pinned thread stays put while it
   works, as in T3.

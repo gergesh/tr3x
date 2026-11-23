@@ -310,15 +310,18 @@ pub fn wanted(shells: &[MachineShell], inbox: &mut Inbox, now: i64) -> Vec<Want>
 
 /// Parks the idle open threads over `budget`, and returns how many. Only a thread with nothing
 /// to say can be parked: one that needs you or works, a pin, a subagent, a thread with a
-/// subagent shown under it, and one Find Thread brought back (`summoned`) always keep their
-/// tab. Of the rest, the most recently active keep theirs, up to the budget's count, and only
-/// while they were active within its idle window. A thread that needs you or works counts
-/// toward the count where its activity ranks it, so one starting a run doesn't hand its place
-/// to another, which would park again when the run ends.
+/// subagent shown under it, one whose pane holds something closing it would lose (`holding`:
+/// text typed in Reply, a forwarded port) and one Find Thread brought back (`summoned`) always
+/// keep their tab. Of the rest, the most recently active keep theirs, up to the budget's count,
+/// and only while they were active within its idle window. A thread that needs you or works,
+/// has a subagent shown or holds something counts toward the count where its activity ranks
+/// it, so one starting a run doesn't hand its place to another, which would park again when
+/// the run ends.
 pub fn park(
     wants: &mut [Want],
     budget: crate::tabs::Budget,
     summoned: &dyn Fn(&str) -> bool,
+    holding: &dyn Fn(&str) -> bool,
     now: i64,
 ) -> usize {
     let parents: HashSet<String> = wants
@@ -328,15 +331,15 @@ pub fn park(
     let mut ranked: Vec<usize> = (0..wants.len())
         .filter(|&i| {
             let w = &wants[i];
-            let key = w.key();
-            !w.child && !w.pinned && !parents.contains(&key) && !summoned(&key)
+            !w.child && !w.pinned && !summoned(&w.key())
         })
         .collect();
     ranked.sort_by_key(|&i| std::cmp::Reverse(wants[i].active_at));
     let mut parked = 0;
     for (rank, i) in ranked.into_iter().enumerate() {
         let w = &mut wants[i];
-        if w.place != Place::Open {
+        let key = w.key();
+        if w.place != Place::Open || parents.contains(&key) || holding(&key) {
             continue;
         }
         let over = budget.open.is_some_and(|n| rank >= n);
@@ -1673,7 +1676,7 @@ async fn follow(
                 dirty = true;
             }
             Some(heard) = heard.recv() => match heard {
-                Heard::Joined => dirty = true,
+                Heard::Joined | Heard::Holding => dirty = true,
                 Heard::Settings => {
                     settings_stamps = crate::width::stamps();
                     panes.tell(None, &Note::Settings);
@@ -1780,10 +1783,12 @@ async fn follow(
                 .retain(|key, at| listed.contains(key) || now_ms - *at < SUMMON_GRACE_MS);
             summoned.extend(group.summoned.keys().cloned());
         }
+        let holding = panes.holding();
         let parked = park(
             &mut wants,
             crate::tabs::budget(),
             &|key| summoned.contains(key),
+            &|key| holding.contains(key),
             now_ms,
         );
         let envs: Vec<String> = hub.envs().iter().map(|e| e.id().to_string()).collect();
@@ -2123,7 +2128,7 @@ mod tests {
             open: Some(2),
             idle: None,
         };
-        assert_eq!(park(&mut wants, budget, &|_| false, now), 1);
+        assert_eq!(park(&mut wants, budget, &|_| false, &|_| false, now), 1);
         assert_eq!(parked(&wants), vec!["old"]);
     }
 
@@ -2141,14 +2146,14 @@ mod tests {
             idle("stale", now - 49 * H),
             idle("unknown", 0),
         ];
-        assert_eq!(park(&mut wants, two_days, &|_| false, now), 1);
+        assert_eq!(park(&mut wants, two_days, &|_| false, &|_| false, now), 1);
         assert_eq!(parked(&wants), vec!["stale"]);
         let none = crate::tabs::Budget {
             open: None,
             idle: None,
         };
         let mut wants = vec![idle("stale", now - 49 * H)];
-        assert_eq!(park(&mut wants, none, &|_| false, now), 0);
+        assert_eq!(park(&mut wants, none, &|_| false, &|_| false, now), 0);
     }
 
     /// A kept thread that starts a run keeps its place in the count, so no parked thread takes
@@ -2165,7 +2170,7 @@ mod tests {
             idle("b", now - 2 * H),
             idle("c", now - 3 * H),
         ];
-        park(&mut wants, budget, &|_| false, now);
+        park(&mut wants, budget, &|_| false, &|_| false, now);
         assert_eq!(parked(&wants), vec!["c"]);
         let mut wants = vec![
             Want {
@@ -2175,7 +2180,7 @@ mod tests {
             idle("b", now - 2 * H),
             idle("c", now - 3 * H),
         ];
-        park(&mut wants, budget, &|_| false, now);
+        park(&mut wants, budget, &|_| false, &|_| false, now);
         assert_eq!(parked(&wants), vec!["c"]);
     }
 
@@ -2194,7 +2199,47 @@ mod tests {
             open: Some(0),
             idle: Some(H),
         };
-        park(&mut wants, budget, &|key| key == "h/found", now);
+        park(&mut wants, budget, &|key| key == "h/found", &|_| false, now);
+        assert_eq!(parked(&wants), vec!["other"]);
+    }
+
+    /// A kept thread that gains a shown subagent keeps its place in the count, as one starting
+    /// a run does, so no parked thread takes it only to park again when the subagent ends.
+    #[test]
+    fn a_kept_thread_gaining_a_subagent_unparks_nothing() {
+        let now = 100 * H;
+        let budget = crate::tabs::Budget {
+            open: Some(2),
+            idle: None,
+        };
+        let mut wants = vec![
+            idle("a", now - H),
+            idle("b", now - 2 * H),
+            idle("c", now - 3 * H),
+            sub("h/kid", "kid", "h/a", false),
+        ];
+        park(&mut wants, budget, &|_| false, &|_| false, now);
+        assert_eq!(parked(&wants), vec!["c"]);
+    }
+
+    /// Closing a parked tab ends its pane, so one holding text typed in Reply, or a forwarded
+    /// port, keeps its tab past the budget, and keeps its place so no other thread unparks.
+    #[test]
+    fn a_thread_whose_pane_holds_something_keeps_its_tab() {
+        let now = 100 * H;
+        let budget = crate::tabs::Budget {
+            open: Some(1),
+            idle: Some(H),
+        };
+        let mut wants = vec![
+            idle("new", now),
+            idle("typed", now - 90 * H),
+            idle("other", now - 90 * H),
+        ];
+        park(&mut wants, budget, &|_| false, &|key| key == "h/typed", now);
+        assert_eq!(parked(&wants), vec!["other"]);
+        let mut wants = vec![idle("typed", now), idle("other", now - 1)];
+        park(&mut wants, budget, &|_| false, &|key| key == "h/typed", now);
         assert_eq!(parked(&wants), vec!["other"]);
     }
 
